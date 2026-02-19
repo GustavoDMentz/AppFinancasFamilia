@@ -6,6 +6,7 @@ import numpy as np
 import plotly.express as px
 from PIL import Image
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from sqlalchemy import create_engine, text
 import pytesseract
 from pdf2image import convert_from_bytes
@@ -27,41 +28,54 @@ def init_db():
                 categoria TEXT,
                 data_registro TIMESTAMPTZ DEFAULT NOW(),
                 pago BOOLEAN DEFAULT FALSE,
-                quem_pagou TEXT  -- Nova coluna para nome da pessoa que pagou
+                quem_pagou TEXT
             )
         """))
         conn.commit()
 
-def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou=""):
+def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
     engine = get_engine()
     
-    valor_limpo = 0.0
+    valor_total = 0.0
     try:
         valor_str = str(valor).strip()
         if valor_str:
-            valor_limpo = float(valor_str.replace('.', '').replace(',', '.'))
+            valor_total = float(valor_str.replace('.', '').replace(',', '.'))
     except (ValueError, AttributeError):
         st.warning(f"Valor inválido ou vazio: '{valor}'. Salvo como R$ 0,00.")
+        valor_total = 0.0
+    
+    if parcelas < 1:
+        parcelas = 1
+    
+    valor_parcela = valor_total / parcelas if parcelas > 0 else valor_total
+    
+    data_inicial = datetime.strptime(data_doc, "%d/%m/%Y")
     
     with engine.connect() as conn:
-        conn.execute(text("""
-            INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago, quem_pagou)
-            VALUES (:data, :valor, :descricao, :categoria, :pago, :quem_pagou)
-        """), {
-            "data": data_doc,
-            "valor": valor_limpo,
-            "descricao": desc,
-            "categoria": cat,
-            "pago": pago,
-            "quem_pagou": quem_pagou.strip() if quem_pagou else None
-        })
+        for i in range(parcelas):
+            parcela_num = i + 1
+            desc_parcela = f"Parcela {parcela_num}/{parcelas} - {desc}" if parcelas > 1 else desc
+            data_parcela = data_inicial + relativedelta(months=i)
+            data_parcela_str = data_parcela.strftime("%d/%m/%Y")
+            
+            conn.execute(text("""
+                INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago, quem_pagou)
+                VALUES (:data, :valor, :descricao, :categoria, :pago, :quem_pagou)
+            """), {
+                "data": data_parcela_str,
+                "valor": valor_parcela,
+                "descricao": desc_parcela,
+                "categoria": cat,
+                "pago": pago if parcela_num == 1 else False,
+                "quem_pagou": quem_pagou if parcela_num == 1 else None
+            })
         conn.commit()
 
 def acoes_db(id_reg, acao, quem_pagou=None):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
-            # Atualiza pago e quem_pagou
             conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE, quem_pagou = :quem WHERE id = :id'), {
                 "quem": quem_pagou.strip() if quem_pagou else None,
                 "id": id_reg
@@ -74,13 +88,12 @@ def acoes_db(id_reg, acao, quem_pagou=None):
 st.set_page_config(
     page_title="Terminal Financeiro Família",
     layout="wide",
-    initial_sidebar_state="collapsed",  # Melhor para mobile
+    initial_sidebar_state="collapsed",
     page_icon="💰"
 )
 
 init_db()
 
-# Estilo simples para mobile (botões maiores, texto legível)
 st.markdown("""
     <style>
     .stButton > button {
@@ -136,43 +149,45 @@ with tab_ocr:
                         'data': venc.strftime("%d/%m/%Y"),
                         'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
                         'desc': desc, 'cat': cat,
-                        'quem_pagou': ""  # Pode tentar detectar nome se quiser, mas por enquanto vazio
+                        'quem_pagou': "",
+                        'parcelas': 1
                     }
                     st.rerun()
         except Exception as e:
             st.error(f"Erro ao ler boleto: {str(e)}. Tente uma imagem clara ou PDF de 1 página.")
 
-    # Preenche campos se veio do OCR
-    if 'dados_temp' in st.session_state:
-        st.info("Dados detectados do boleto. Ajuste se necessário e salve manualmente abaixo.")
-
 with tab_manual:
     st.subheader("⌨️ Novo Lançamento")
     if st.button("Limpar formulário"):
-        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
+        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelas': 1}
         st.rerun()
 
     with st.form("form_financeiro"):
-        f_desc = st.text_input("Descrição (ex: Condomínio, Energia)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
+        f_desc = st.text_input("Descrição (ex: Geladeira 12x)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
         lista_cats = ["Moradia", "Saúde", "Alimentação", "Contas", "Transporte", "Educação", "Investimento", "Outros"]
         f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state.get('dados_temp', {}).get('cat', 'Outros')) if st.session_state.get('dados_temp', {}).get('cat') in lista_cats else 0)
 
         c_d, c_v = st.columns(2)
-        f_data = c_d.text_input("Vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
-        f_valor = c_v.text_input("Valor R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
+        f_data = c_d.text_input("Primeiro vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
+        f_valor = c_v.text_input("Valor TOTAL R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-        f_pago = st.checkbox("Já paguei")
-        f_quem_pagou = st.text_input("Quem pagou? (nome da pessoa)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
+        # Nova UX: Checkbox + condicional
+        f_parcelado = st.checkbox("Parcelado?", value=False)
+        f_parcelas = 1
+        if f_parcelado:
+            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=12, step=1, help="Valor total será dividido igualmente.")
 
-        if st.form_submit_button("✅ Salvar Lançamento"):
+        f_pago = st.checkbox("Primeira parcela já paga")
+        f_quem_pagou = st.text_input("Quem pagou a primeira parcela? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
+
+        if st.form_submit_button("✅ Salvar Lançamento(s)"):
             if not f_valor.strip():
-                st.error("Preencha o valor!")
+                st.error("Preencha o valor total!")
             else:
-                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
-                st.success("Lançamento salvo!")
+                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, f_parcelas)
+                st.success(f"{f_parcelas} lançamento(s) salvo(s)!")
                 st.balloons()
-                # Limpa temp após salvar
-                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
+                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelas': 1}
 
 with tab_dashboard:
     try:
@@ -184,11 +199,9 @@ with tab_dashboard:
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
 
-        # Resumo geral
         pendente_total = df[df['pago'] == False]['valor'].sum()
         st.info(f"💰 Contas pendentes totais: **R$ {pendente_total:,.2f}**")
 
-        # Por pessoa
         pagos_por_pessoa = df[df['pago'] == True].groupby('quem_pagou')['valor'].sum().reset_index()
         if not pagos_por_pessoa.empty:
             st.subheader("Pagamentos por pessoa")
