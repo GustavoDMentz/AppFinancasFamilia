@@ -3,7 +3,7 @@ pandas
 numpy
 plotly
 pillow
-pdf2image
-easyocr
+pytesseract
 sqlalchemy
-psycopg2-binary  # driver PostgreSQL obrigatório para SQLAlchemy
+psycopg2-binary
+pdf2image  # Mantenha, mas vamos usar com cuidado
