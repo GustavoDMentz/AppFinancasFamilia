@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
-import easyocr
 import os
 import re
 import numpy as np
 import plotly.express as px
 from PIL import Image
 from datetime import datetime
-from pdf2image import convert_from_bytes
 from sqlalchemy import create_engine, text
+import pytesseract
+from pdf2image import convert_from_bytes
 
 # --- CONFIGURAÇÃO DB SUPABASE ---
 @st.cache_resource
@@ -33,12 +33,10 @@ def init_db():
 
 def salvar_no_db(data_doc, valor, desc, cat, pago):
     engine = get_engine()
-    
-    # Valor sempre definido, com fallback
     valor_limpo = 0.0
     try:
-        valor_str = str(valor).strip()  # Converte para string e remove espaços
-        if valor_str:  # Evita erro em vazio
+        valor_str = str(valor).strip()
+        if valor_str:
             valor_limpo = float(valor_str.replace('.', '').replace(',', '.'))
     except (ValueError, AttributeError):
         st.warning(f"Valor inválido ou vazio: '{valor}'. Salvo como R$ 0,00.")
@@ -69,12 +67,6 @@ def acoes_db(id_reg, acao):
 st.set_page_config(page_title="Terminal Financeiro v3.6 - Supabase", layout="wide")
 init_db()
 
-@st.cache_resource
-def load_model():
-    return easyocr.Reader(['pt'], gpu=os.path.exists('/opt/bin/nvidia-smi'))
-
-reader = load_model()
-
 st.title("💰 Gestão Financeira Absoluta")
 
 tab1, tab2 = st.tabs(["🚀 Lançamentos", "📊 Dashboard & Gestão"])
@@ -86,48 +78,47 @@ with tab1:
     col_scan, col_manual = st.columns([1, 1])
 
     with col_scan:
-        st.subheader("📷 Scanner de Boletos")
-        uploaded_file = st.file_uploader("Upload PDF/Imagem", type=["png", "jpg", "jpeg", "pdf"])
+        st.subheader("📷 Scanner de Boletos (Tesseract - leve)")
+        uploaded_file = st.file_uploader("Upload PDF ou Imagem", type=["png", "jpg", "jpeg", "pdf"])
 
         if uploaded_file:
             try:
                 if uploaded_file.type == "application/pdf":
-                    # Correção principal: força o caminho do Poppler instalado pelo packages.txt
-                    img = convert_from_bytes(uploaded_file.read(), dpi=250, poppler_path="/usr/bin")[0]
+                    # Converte só a primeira página para manter leve
+                    images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
+                    img = images[0]
                 else:
                     img = Image.open(uploaded_file)
                 st.image(img, width=250)
+
+                if st.button("🔍 Escanear Agora"):
+                    with st.spinner("Processando OCR com Tesseract (leve)..."):
+                        # Tesseract - lang='por' para português
+                        txt = pytesseract.image_to_string(img, lang='por', config='--psm 6')
+                        txt = txt.lower()
+
+                        desc, cat = "Outros", "Outros"
+                        if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                        elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
+
+                        vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
+                        nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+
+                        v_calc = nums[0] if nums else 0.0
+
+                        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                        hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                        dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
+                        venc = max(dts) if dts else hoje
+
+                        st.session_state['dados_temp'] = {
+                            'data': venc.strftime("%d/%m/%Y"),
+                            'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
+                            'desc': desc, 'cat': cat
+                        }
+                        st.rerun()
             except Exception as e:
-                st.error(f"Erro ao processar o arquivo: {str(e)}. Tente com uma imagem PNG/JPG ou verifique se o PDF é válido.")
-                st.stop()
-
-            if st.button("🔍 Escanear Agora"):
-                try:
-                    res = reader.readtext(np.array(img), detail=0)
-                    txt = " ".join(res).lower()
-
-                    desc, cat = "Outros", "Outros"
-                    if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
-                    elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
-
-                    vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
-                    nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
-
-                    v_calc = nums[0] if nums else 0.0
-
-                    datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                    hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                    dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
-                    venc = max(dts) if dts else hoje
-
-                    st.session_state['dados_temp'] = {
-                        'data': venc.strftime("%d/%m/%Y"),
-                        'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
-                        'desc': desc, 'cat': cat
-                    }
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erro no OCR: {str(e)}. Tente uma imagem mais clara ou PDF simples.")
+                st.error(f"Erro ao processar arquivo: {str(e)}. Tente uma imagem clara ou PDF simples (1 página).")
 
     with col_manual:
         st.subheader("⌨️ Entrada de Dados")
@@ -158,7 +149,7 @@ with tab2:
         df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
     except Exception as e:
         st.error(f"Erro ao carregar dados: {str(e)}")
-        df = pd.DataFrame()  # Evita crash total
+        df = pd.DataFrame()
 
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
