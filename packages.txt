@@ -1,2 +1,3 @@
-poppler-utils
-libpoppler-dev
+tesseract-ocr
+tesseract-ocr-por
+poppler-utils  # Para pdf2image
