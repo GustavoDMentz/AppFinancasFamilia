@@ -6,4 +6,4 @@ pillow
 pytesseract
 sqlalchemy
 psycopg2-binary
-pdf2image  # Mantenha, mas vamos usar com cuidado
+pdf2image==1.17.0
