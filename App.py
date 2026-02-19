@@ -48,7 +48,7 @@ def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
     if parcelas < 1:
         parcelas = 1
     
-    valor_parcela = round(valor_total / parcelas, 2)  # Arredonda para 2 casas
+    valor_parcela = round(valor_total / parcelas, 2)
     
     data_inicial = datetime.strptime(data_doc, "%d/%m/%Y")
     
@@ -98,7 +98,7 @@ st.markdown("""
     <style>
     .stButton > button {
         width: 100%;
-        height: 3rem;
+        height: 3.2rem;
         font-size: 1.2rem;
         margin-top: 1rem;
     }
@@ -107,20 +107,27 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     .stTabs [data-baseweb="tab-list"] {
-        gap: 1rem;
+        gap: 0.8rem;
+        flex-wrap: wrap;
     }
     .stForm > div {
-        gap: 1rem !important;
+        gap: 1.2rem !important;
     }
     label {
         font-size: 1.1rem !important;
+        font-weight: 500;
     }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("💰 Gestão Financeira Família")
 
-tab_ocr, tab_manual, tab_dashboard = st.tabs(["Scanner OCR", "Lançamento Manual", "Dashboard & Gestão"])
+tab_ocr, tab_contas, tab_cartao, tab_dashboard = st.tabs([
+    "Scanner OCR", 
+    "Contas Fixas / Consumo", 
+    "Compras no Cartão (Parceladas)", 
+    "Dashboard & Gestão"
+])
 
 with tab_ocr:
     st.subheader("📷 Scanner de Boletos (Tesseract)")
@@ -165,36 +172,65 @@ with tab_ocr:
         except Exception as e:
             st.error(f"Erro ao ler boleto: {str(e)}. Tente uma imagem clara ou PDF de 1 página.")
 
-with tab_manual:
-    st.subheader("⌨️ Novo Lançamento")
+with tab_contas:
+    st.subheader("Contas Fixas / Consumo (luz, água, condomínio...)")
     if st.button("Limpar formulário"):
         st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
         st.rerun()
 
-    with st.form("form_financeiro"):
-        f_desc = st.text_input("Descrição (ex: Geladeira 12x)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
-        lista_cats = ["Moradia", "Saúde", "Alimentação", "Contas", "Transporte", "Educação", "Investimento", "Outros"]
+    with st.form("form_contas"):
+        f_desc = st.text_input("Descrição (ex: Conta de Luz CEEE)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
+        lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
         f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state.get('dados_temp', {}).get('cat', 'Outros')) if st.session_state.get('dados_temp', {}).get('cat') in lista_cats else 0)
 
         c_d, c_v = st.columns(2)
-        f_data = c_d.text_input("Primeiro vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
+        f_data = c_d.text_input("Vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
         f_valor = c_v.text_input("Valor TOTAL R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-        # Checkbox retangular + condicional
-        f_parcelado = st.checkbox("Parcelado?", value=st.session_state.get('dados_temp', {}).get('parcelado', False))
+        f_parcelado = st.checkbox("Parcelado?", value=False)
         f_parcelas = 1
         if f_parcelado:
-            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=12, step=1, help="Valor total será dividido igualmente entre as parcelas.")
+            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=12, step=1, help="Valor total será dividido igualmente.")
 
         f_pago = st.checkbox("Primeira parcela já paga")
         f_quem_pagou = st.text_input("Quem pagou a primeira parcela? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
 
-        if st.form_submit_button("✅ Salvar Lançamento(s)"):
+        if st.form_submit_button("✅ Salvar Conta(s)"):
             if not f_valor.strip():
                 st.error("Preencha o valor total!")
             else:
                 salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, f_parcelas)
                 st.success(f"{f_parcelas} lançamento(s) salvo(s)!")
+                st.balloons()
+                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
+
+with tab_cartao:
+    st.subheader("Compras Parceladas no Cartão")
+    st.info("Registre aqui compras feitas no cartão de crédito em parcelas. Elas aparecerão nas faturas futuras.")
+
+    with st.form("form_cartao"):
+        f_desc = st.text_input("Descrição (ex: Celular 10x no cartão)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
+        lista_cats = ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"]
+        f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state.get('dados_temp', {}).get('cat', 'Outros')) if st.session_state.get('dados_temp', {}).get('cat') in lista_cats else 0)
+
+        c_d, c_v = st.columns(2)
+        f_data = c_d.text_input("Data da primeira parcela (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
+        f_valor = c_v.text_input("Valor TOTAL da compra R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
+
+        f_parcelado = st.checkbox("Parcelado?", value=True, help="A maioria das compras no cartão são parceladas.")
+        f_parcelas = 1
+        if f_parcelado:
+            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=10, step=1)
+
+        f_pago = st.checkbox("Primeira parcela já veio na fatura e foi paga")
+        f_quem_pagou = st.text_input("Quem pagou a primeira parcela? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
+
+        if st.form_submit_button("✅ Salvar Compra(s) no Cartão"):
+            if not f_valor.strip():
+                st.error("Preencha o valor total da compra!")
+            else:
+                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, f_parcelas)
+                st.success(f"{f_parcelas} parcela(s) registrada(s)!")
                 st.balloons()
                 st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
 
