@@ -12,7 +12,7 @@ import pytesseract
 from pdf2image import convert_from_bytes
 
 # ==========================================
-# CONFIGURAÇÃO DA PÁGINA (Deve ser a 1ª linha)
+# CONFIGURAÇÃO DA PÁGINA
 # ==========================================
 st.set_page_config(
     page_title="Terminal Financeiro",
@@ -22,11 +22,10 @@ st.set_page_config(
 )
 
 # ==========================================
-# CUSTOM CSS (Design System Minimalista)
+# CUSTOM CSS
 # ==========================================
 st.markdown("""
     <style>
-    /* Ajustes refinados de UI */
     .stTabs [data-baseweb="tab-list"] { gap: 1rem; }
     .stTabs [data-baseweb="tab"] { font-weight: 600; font-size: 1.05rem; }
     div[data-testid="stMetricValue"] { font-size: 2rem !important; }
@@ -34,7 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# CAMADA DE BANCO DE DADOS (Preservada)
+# CAMADA DE BANCO DE DADOS
 # ==========================================
 @st.cache_resource
 def get_engine():
@@ -82,13 +81,17 @@ def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
                 INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago, quem_pagou)
                 VALUES (:data, :valor, :descricao, :categoria, :pago, :quem_pagou)
             """), {
-                "data": data_parcela, "valor": valor_parcela, "descricao": desc_parcela,
-                "categoria": cat, "pago": pago if parcela_num == 1 else False,
-                "quem_pagou": quem_pagou if parcela_num == 1 else None
+                "data": data_parcela, 
+                "valor": valor_parcela, 
+                "descricao": desc_parcela,
+                "categoria": cat, 
+                "pago": pago if parcela_num == 1 else False,
+                # ATUALIZAÇÃO 1: O responsável é salvo para TODAS as parcelas
+                "quem_pagou": quem_pagou.strip() if quem_pagou else None
             })
         conn.commit()
 
-def acoes_db(id_reg, acao, quem_pagou=None):
+def acoes_db(id_reg, acao):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
@@ -98,18 +101,20 @@ def acoes_db(id_reg, acao, quem_pagou=None):
             desc_completa, data_atual = parcela_atual
             desc_base = desc_completa.split(" - ", 1)[1] if " - " in desc_completa else desc_completa
 
+            # Trava de segurança: impede pagar parcela 3 se a 2 estiver pendente
             anteriores_pendentes = conn.execute(text("""
                 SELECT COUNT(*) FROM "Lançamentos"
                 WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE AND data < :data_atual
             """), {"desc_base": desc_base, "data_atual": data_atual}).fetchone()[0]
 
             if anteriores_pendentes > 0:
-                return False, "Você deve pagar primeiro as parcelas anteriores pendentes!"
+                return False, "Você deve pagar primeiro a(s) parcela(s) anterior(es) desta compra!"
 
+            # ATUALIZAÇÃO 2: Atualiza APENAS o ID específico (quita 1 mês só)
             conn.execute(text("""
-                UPDATE "Lançamentos" SET pago = TRUE, quem_pagou = :quem
-                WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE
-            """), {"quem": quem_pagou.strip() if quem_pagou else None, "desc_base": desc_base})
+                UPDATE "Lançamentos" SET pago = TRUE
+                WHERE id = :id
+            """), {"id": id_reg})
         
         elif acao == "excluir":
             conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
@@ -117,16 +122,15 @@ def acoes_db(id_reg, acao, quem_pagou=None):
     return True, "Ação realizada com sucesso."
 
 # ==========================================
-# MODAIS NATIVOS (SOTA para ações em listas)
+# MODAIS NATIVOS
 # ==========================================
 @st.dialog("Confirmar Pagamento")
 def modal_pagamento(lancamento_id, descricao):
     st.write(f"Você está pagando: **{descricao}**")
-    st.info("Caso seja uma compra parcelada, isso quitará TODAS as parcelas restantes desta compra.")
-    quem_pagou = st.text_input("Quem realizou o pagamento?")
+    st.info("Apenas esta parcela será marcada como paga. O responsável financeiro já está registrado.")
     
     if st.button("Confirmar Pagamento", type="primary", use_container_width=True):
-        sucesso, msg = acoes_db(lancamento_id, "pagar", quem_pagou)
+        sucesso, msg = acoes_db(lancamento_id, "pagar")
         if sucesso:
             st.session_state['refresh'] = True
             st.rerun()
@@ -211,7 +215,6 @@ with t_contas:
             f_desc = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
             lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
             
-            # Tratamento de fallback seguro para o selectbox
             cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
             idx_cat = lista_cats.index(cat_atual) if cat_atual in lista_cats else lista_cats.index("Outros")
             f_cat = st.selectbox("Categoria", lista_cats, index=idx_cat)
@@ -222,7 +225,7 @@ with t_contas:
 
             c3, c4 = st.columns(2)
             f_pago = c3.checkbox("Já paguei")
-            f_quem_pagou = c4.text_input("Quem pagou?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
+            f_quem_pagou = c4.text_input("Responsável pelo pagamento?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
 
             if st.form_submit_button("✅ Salvar Conta", type="primary", use_container_width=True):
                 if not f_valor.strip():
@@ -250,14 +253,14 @@ with t_cartao:
 
             c4, c5 = st.columns(2)
             f_pago_c = c4.checkbox("1ª parcela já veio e foi paga")
-            f_quem_pagou_c = c5.text_input("Quem pagou/pagará?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
+            f_quem_pagou_c = c5.text_input("Quem é o responsável por esta compra?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
 
             if st.form_submit_button("✅ Salvar Compra Parcelada", type="primary", use_container_width=True):
                 if not f_valor_c.strip():
                     st.error("Preencha o valor total!")
                 else:
                     salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
-                    st.toast(f"{f_parcelas_c} parcelas registradas!", icon="💳")
+                    st.toast(f"{f_parcelas_c} parcelas registradas para {f_quem_pagou_c}!", icon="💳")
 
 # --- TAB 4: DASHBOARD ---
 with t_dash:
@@ -266,7 +269,6 @@ with t_dash:
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
         
-        # SOTA: Métricas superiores
         m1, m2, m3 = st.columns(3)
         total_pendente = df[df['pago'] == False]['valor'].sum()
         total_pago = df[df['pago'] == True]['valor'].sum()
@@ -278,7 +280,6 @@ with t_dash:
 
         st.divider()
 
-        # SOTA: Gráficos Plotly Clean
         c1, c2 = st.columns([3, 2])
         with c1:
             st.markdown("##### 📈 Gastos por Mês")
@@ -298,7 +299,6 @@ with t_dash:
         st.divider()
         st.markdown("### 📋 Gestão de Lançamentos")
         
-        # Filtros SOTA
         f_col1, f_col2 = st.columns([1, 4])
         filtro_status = f_col1.radio("Filtrar por:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
         
@@ -306,7 +306,6 @@ with t_dash:
         if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
         elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
 
-        # Renderização da lista usando st.container para UI limpa
         for _, row in df_view.iterrows():
             with st.container(border=True):
                 col_info, col_valor, col_acoes = st.columns([5, 2, 2])
@@ -314,15 +313,17 @@ with t_dash:
                 status_icon = "✅" if row['pago'] else "⏳"
                 status_color = "green" if row['pago'] else "orange"
                 
+                # Exibe o responsável mesmo que a conta ainda não esteja paga
+                tag_responsavel = f"| 👤 {row['quem_pagou']}" if pd.notna(row['quem_pagou']) and str(row['quem_pagou']).strip() else ""
+                
                 with col_info:
                     st.markdown(f"**{row['descricao']}**")
-                    st.caption(f"{status_icon} :{status_color}[{row['data']}] | 🏷️ {row['categoria']} " + (f"| 👤 {row['quem_pagou']}" if row['pago'] else ""))
+                    st.caption(f"{status_icon} :{status_color}[{row['data']}] | 🏷️ {row['categoria']} {tag_responsavel}")
                 
                 with col_valor:
                     st.markdown(f"<h4 style='margin:0; padding-top:0.5rem;'>R$ {row['valor']:,.2f}</h4>", unsafe_allow_html=True)
                 
                 with col_acoes:
-                    # Uso das Dialogs para evitar o bug de nested buttons
                     if not row['pago']:
                         if st.button("Pagar", key=f"pay_{row['id']}", use_container_width=True):
                             modal_pagamento(row['id'], row['descricao'])
