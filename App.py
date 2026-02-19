@@ -10,6 +10,7 @@ from dateutil.relativedelta import relativedelta
 from sqlalchemy import create_engine, text
 import pytesseract
 from pdf2image import convert_from_bytes
+import uuid
 
 # ==========================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -126,7 +127,6 @@ def acoes_db(id_reg, acao):
 def modal_pagamento(lancamento_id, descricao):
     st.write(f"**{descricao}**")
     st.info("Apenas esta parcela será marcada como paga.")
-    
     if st.button("✅ Confirmar Pagamento", type="primary", use_container_width=True):
         sucesso, msg = acoes_db(lancamento_id, "pagar")
         if sucesso:
@@ -148,7 +148,11 @@ def modal_exclusao(lancamento_id):
 # ==========================================
 init_db()
 if 'dados_temp' not in st.session_state:
-    st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
+    st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros'}
+if 'ocr_concluido' not in st.session_state:
+    st.session_state['ocr_concluido'] = False
+if 'uploader_key' not in st.session_state:
+    st.session_state['uploader_key'] = str(uuid.uuid4())
 
 # ==========================================
 # UI PRINCIPAL
@@ -163,7 +167,6 @@ with t_dash:
 
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
-        
         total_pendente = df[df['pago'] == False]['valor'].sum()
         total_pago = df[df['pago'] == True]['valor'].sum()
         
@@ -174,8 +177,6 @@ with t_dash:
         st.divider()
 
         tab_g1, tab_g2, tab_g3 = st.tabs(["👤 Divisão", "📈 Mensal", "🍕 Categoria"])
-        
-        # CONFIGURAÇÃO ANTI-TOQUE ACIDENTAL (SOTA Mobile)
         mobile_config = {'staticPlot': True, 'displayModeBar': False}
 
         with tab_g1:
@@ -241,18 +242,14 @@ with t_dash:
 with t_contas:
     with st.container(border=True):
         with st.form("form_contas", clear_on_submit=True):
-            f_desc = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
-            
+            f_desc = st.text_input("Descrição", value="")
             c1, c2 = st.columns(2)
             lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
-            cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
-            f_cat = c1.selectbox("Categoria", lista_cats, index=lista_cats.index(cat_atual) if cat_atual in lista_cats else 6)
-            f_data = c2.text_input("Vencimento", value=st.session_state['dados_temp'].get('data'))
-            
+            f_cat = c1.selectbox("Categoria", lista_cats, index=6)
+            f_data = c2.text_input("Vencimento (dd/mm/aaaa)", value=datetime.now().strftime("%d/%m/%Y"))
             c3, c4 = st.columns(2)
-            f_valor = c3.text_input("Valor R$", value=st.session_state['dados_temp'].get('valor'))
-            f_quem_pagou = c4.text_input("Responsável?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
-            
+            f_valor = c3.text_input("Valor R$", value="")
+            f_quem_pagou = c4.text_input("Responsável?")
             f_pago = st.checkbox("Já paguei")
 
             if st.form_submit_button("✅ Salvar Conta", type="primary", use_container_width=True):
@@ -265,18 +262,14 @@ with t_contas:
 with t_cartao:
     with st.container(border=True):
         with st.form("form_cartao", clear_on_submit=True):
-            f_desc_c = st.text_input("Descrição da Compra", value=st.session_state['dados_temp'].get('desc', ''))
-            
+            f_desc_c = st.text_input("Descrição da Compra", value="")
             c1, c2 = st.columns(2)
-            f_data_c = c1.text_input("Data 1ª Parcela", value=st.session_state['dados_temp'].get('data'))
-            f_valor_c = c2.text_input("Valor TOTAL R$", value=st.session_state['dados_temp'].get('valor'))
-            
+            f_data_c = c1.text_input("Data 1ª Parcela", value=datetime.now().strftime("%d/%m/%Y"))
+            f_valor_c = c2.text_input("Valor TOTAL R$", value="")
             c3, c4 = st.columns(2)
-            f_parcelas_c = c3.number_input("Parcelas", min_value=2, max_value=36, value=10, step=1)
-            lista_cats_c = ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"]
-            f_cat_c = c4.selectbox("Categoria ", lista_cats_c, index=6)
-
-            f_quem_pagou_c = st.text_input("Responsável pela compra?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
+            f_parcelas_c = c3.number_input("Parcelas", min_value=2, max_value=36, value=2, step=1)
+            f_cat_c = c4.selectbox("Categoria ", ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"], index=6)
+            f_quem_pagou_c = st.text_input("Responsável pela compra?")
             f_pago_c = st.checkbox("1ª parcela já paga")
 
             if st.form_submit_button("✅ Salvar Compra", type="primary", use_container_width=True):
@@ -285,41 +278,97 @@ with t_cartao:
                     salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
                     st.toast("Compra parcelada salva!", icon="💳")
 
-# --- TAB 4: OCR ---
+# --- TAB 4: OCR (Fluxo Contínuo) ---
 with t_ocr:
-    st.info("No celular, você pode tirar uma foto do boleto na hora.")
-    uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed")
+    st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
+    
+    # Campo de Upload com key dinâmica (permite limpar após salvar)
+    uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed", key=st.session_state['uploader_key'])
 
     if uploaded_file:
-        if st.button("🔍 Extrair Dados", type="primary", use_container_width=True):
-            with st.status("Lendo documento...", expanded=True) as status:
-                try:
-                    if uploaded_file.type == "application/pdf":
-                        images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
-                        img = images[0]
-                    else:
-                        img = Image.open(uploaded_file)
+        try:
+            if uploaded_file.type == "application/pdf":
+                images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
+                img = images[0]
+            else:
+                img = Image.open(uploaded_file)
+            
+            # Pré-visualização da Imagem
+            with st.expander("👁️ Ver documento carregado", expanded=not st.session_state['ocr_concluido']):
+                st.image(img, use_column_width=True)
+
+            # Botão de Extração (some após concluir)
+            if not st.session_state['ocr_concluido']:
+                if st.button("🔍 Analisar Documento", type="primary", use_container_width=True):
+                    with st.status("Lendo documento...", expanded=True) as status:
+                        txt = pytesseract.image_to_string(img, lang='por', config='--psm 6').lower()
+                        
+                        desc, cat = "Outros", "Outros"
+                        if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                        elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia", "Moradia"
+
+                        vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
+                        nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+                        v_calc = nums[0] if nums else 0.0
+
+                        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                        hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                        dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
+                        venc = max(dts) if dts else hoje
+
+                        st.session_state['dados_temp'] = {
+                            'data': venc.strftime("%d/%m/%Y"),
+                            'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
+                            'desc': desc, 'cat': cat
+                        }
+                        
+                        st.session_state['ocr_concluido'] = True
+                        status.update(label="Documento lido com sucesso!", state="complete", expanded=False)
+                        st.rerun()
+
+            # Formulário de Revisão Integrado (aparece APÓS a leitura)
+            if st.session_state['ocr_concluido']:
+                st.success("✨ Dados extraídos! Revise e salve abaixo.")
+                
+                with st.container(border=True):
+                    f_desc_o = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
                     
-                    txt = pytesseract.image_to_string(img, lang='por', config='--psm 6').lower()
+                    c1, c2 = st.columns(2)
+                    f_data_o = c1.text_input("Vencimento", value=st.session_state['dados_temp'].get('data', ''))
+                    f_valor_o = c2.text_input("Valor R$", value=st.session_state['dados_temp'].get('valor', ''))
                     
-                    desc, cat = "Outros", "Outros"
-                    if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
-                    elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia", "Moradia"
+                    lista_cats_o = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
+                    cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
+                    f_cat_o = st.selectbox("Categoria", lista_cats_o, index=lista_cats_o.index(cat_atual) if cat_atual in lista_cats_o else 6)
+                    
+                    st.divider()
+                    
+                    # Permite escolher entre à vista ou parcelado direto no OCR
+                    f_parcelado_o = st.checkbox("🔄 Transformar em Compra Parcelada?")
+                    f_parcelas_o = 1
+                    if f_parcelado_o:
+                        f_parcelas_o = st.number_input("Qtd de Parcelas", min_value=2, max_value=36, value=2, step=1)
+                        
+                    f_quem_pagou_o = st.text_input("Responsável pelo pagamento?")
+                    f_pago_o = st.checkbox("Já paguei este valor")
 
-                    vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
-                    nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
-                    v_calc = nums[0] if nums else 0.0
+                    btn_c1, btn_c2 = st.columns(2)
+                    with btn_c1:
+                        if st.button("✅ Confirmar e Salvar", type="primary", use_container_width=True):
+                            if not f_valor_o.strip(): st.error("Verifique o valor!")
+                            else:
+                                salvar_no_db(f_data_o, f_valor_o, f_desc_o, f_cat_o, f_pago_o, f_quem_pagou_o, f_parcelas_o)
+                                st.toast("Documento salvo!", icon="🎉")
+                                # Reseta o OCR e limpa a foto
+                                st.session_state['ocr_concluido'] = False
+                                st.session_state['uploader_key'] = str(uuid.uuid4())
+                                st.rerun()
+                    with btn_c2:
+                        if st.button("❌ Cancelar", use_container_width=True):
+                            # Descarta tudo e limpa a foto
+                            st.session_state['ocr_concluido'] = False
+                            st.session_state['uploader_key'] = str(uuid.uuid4())
+                            st.rerun()
 
-                    datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                    hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                    dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
-                    venc = max(dts) if dts else hoje
-
-                    st.session_state['dados_temp'] = {
-                        'data': venc.strftime("%d/%m/%Y"),
-                        'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
-                        'desc': desc, 'cat': cat, 'quem_pagou': "", 'parcelado': False, 'parcelas': 1
-                    }
-                    status.update(label="Extraído! Vá em Fixo/Cartão.", state="complete", expanded=False)
-                except Exception as e:
-                    st.error(f"Erro: {str(e)}")
+        except Exception as e:
+            st.error(f"Erro ao carregar imagem: {str(e)}")
