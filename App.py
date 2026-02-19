@@ -32,18 +32,6 @@ def init_db():
         """))
         conn.commit()
 
-# --- DEBUG DE CONEXÃO (adicionei aqui para ver o erro real) ---
-st.subheader("Debug de Conexão Supabase")
-try:
-    engine = get_engine()
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT version();")).fetchone()
-        st.success(f"Conexão OK! Versão PostgreSQL: {result[0]}")
-except Exception as e:
-    st.error(f"Erro ao conectar ao Supabase: {str(e)}")
-    st.info("Copie o erro acima e cole aqui para debug. Prováveis causas: senha errada, role do pooler não sincronizado, URI incompleta ou SSL/porta errada.")
-    st.stop()  # Para o app não tentar continuar se o banco falhar
-
 # --- RESTANTE DO CÓDIGO (sem mudanças) ---
 @st.cache_resource
 def load_model():
