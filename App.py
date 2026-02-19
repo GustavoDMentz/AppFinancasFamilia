@@ -90,36 +90,44 @@ with tab1:
         uploaded_file = st.file_uploader("Upload PDF/Imagem", type=["png", "jpg", "jpeg", "pdf"])
 
         if uploaded_file:
-            if uploaded_file.type == "application/pdf":
-               img = convert_from_bytes(uploaded_file.read(), dpi=250, poppler_path="/usr/bin")[0]
-            else:
-                img = Image.open(uploaded_file)
-            st.image(img, width=250)
+            try:
+                if uploaded_file.type == "application/pdf":
+                    # Correção principal: força o caminho do Poppler instalado pelo packages.txt
+                    img = convert_from_bytes(uploaded_file.read(), dpi=250, poppler_path="/usr/bin")[0]
+                else:
+                    img = Image.open(uploaded_file)
+                st.image(img, width=250)
+            except Exception as e:
+                st.error(f"Erro ao processar o arquivo: {str(e)}. Tente com uma imagem PNG/JPG ou verifique se o PDF é válido.")
+                st.stop()
 
             if st.button("🔍 Escanear Agora"):
-                res = reader.readtext(np.array(img), detail=0)
-                txt = " ".join(res).lower()
+                try:
+                    res = reader.readtext(np.array(img), detail=0)
+                    txt = " ".join(res).lower()
 
-                desc, cat = "Outros", "Outros"
-                if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
-                elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
+                    desc, cat = "Outros", "Outros"
+                    if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                    elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
 
-                vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
-                nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+                    vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
+                    nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
 
-                v_calc = nums[0] if nums else 0.0
+                    v_calc = nums[0] if nums else 0.0
 
-                datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
-                venc = max(dts) if dts else hoje
+                    datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                    hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
+                    venc = max(dts) if dts else hoje
 
-                st.session_state['dados_temp'] = {
-                    'data': venc.strftime("%d/%m/%Y"),
-                    'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
-                    'desc': desc, 'cat': cat
-                }
-                st.rerun()
+                    st.session_state['dados_temp'] = {
+                        'data': venc.strftime("%d/%m/%Y"),
+                        'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
+                        'desc': desc, 'cat': cat
+                    }
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro no OCR: {str(e)}. Tente uma imagem mais clara ou PDF simples.")
 
     with col_manual:
         st.subheader("⌨️ Entrada de Dados")
