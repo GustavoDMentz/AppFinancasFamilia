@@ -12,11 +12,11 @@ import pytesseract
 from pdf2image import convert_from_bytes
 
 # ==========================================
-# CONFIGURAÇÃO DA PÁGINA (Otimizado Mobile)
+# CONFIGURAÇÃO DA PÁGINA
 # ==========================================
 st.set_page_config(
     page_title="Terminal Financeiro",
-    layout="centered", # Centered funciona melhor no mobile nativo do Streamlit
+    layout="centered", 
     initial_sidebar_state="collapsed",
     page_icon="💸"
 )
@@ -26,17 +26,12 @@ st.set_page_config(
 # ==========================================
 st.markdown("""
     <style>
-    /* Abas maiores e mais fáceis para tocar */
     .stTabs [data-baseweb="tab-list"] { gap: 0.5rem; justify-content: space-between; }
     .stTabs [data-baseweb="tab"] { font-weight: 600; font-size: 1rem; padding-left: 0.5rem; padding-right: 0.5rem; }
-    
-    /* Métricas responsivas e texto de valor estilo App Banco */
     div[data-testid="stMetricValue"] { font-size: 1.8rem !important; }
     .valor-card { font-size: 1.6rem; font-weight: 700; margin: 0; padding-top: 0.2rem; padding-bottom: 0.5rem; }
     .valor-pendente { color: #FF7F0E; }
     .valor-pago { color: #2CA02C; }
-    
-    /* Ajuste para evitar o notch/home indicator no iOS */
     .block-container { padding-bottom: 5rem; padding-top: 2rem; }
     </style>
 """, unsafe_allow_html=True)
@@ -162,7 +157,7 @@ st.markdown("### 💸 Gestão Família")
 
 t_dash, t_contas, t_cartao, t_ocr = st.tabs(["📊 Painel", "🧾 Fixo", "💳 Cartão", "📷 Scan"])
 
-# --- TAB 1: DASHBOARD (Principal no Mobile) ---
+# --- TAB 1: DASHBOARD ---
 with t_dash:
     df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
 
@@ -178,9 +173,11 @@ with t_dash:
 
         st.divider()
 
-        # SOTA Mobile: Gráficos em Sub-abas para evitar rolagem longa
         tab_g1, tab_g2, tab_g3 = st.tabs(["👤 Divisão", "📈 Mensal", "🍕 Categoria"])
         
+        # CONFIGURAÇÃO ANTI-TOQUE ACIDENTAL (SOTA Mobile)
+        mobile_config = {'staticPlot': True, 'displayModeBar': False}
+
         with tab_g1:
             df['quem_pagou'] = df['quem_pagou'].fillna("").astype(str).str.strip()
             df_pessoas = df[(df['pago'] == True) & (df['quem_pagou'] != "")]
@@ -188,8 +185,8 @@ with t_dash:
                 soma_pessoas = df_pessoas.groupby('quem_pagou')['valor'].sum().reset_index().sort_values('valor', ascending=True)
                 fig_pessoas = px.bar(soma_pessoas, x='valor', y='quem_pagou', text='valor', color='quem_pagou', color_discrete_sequence=px.colors.qualitative.Set2, orientation='h')
                 fig_pessoas.update_traces(texttemplate='R$ %{text:,.2f}', textposition='inside')
-                fig_pessoas.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), xaxis_title="", yaxis_title="", showlegend=False, xaxis=dict(showticklabels=False))
-                st.plotly_chart(fig_pessoas, use_container_width=True)
+                fig_pessoas.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), xaxis_title="", yaxis_title="", showlegend=False, xaxis=dict(showticklabels=False))
+                st.plotly_chart(fig_pessoas, use_container_width=True, config=mobile_config)
             else:
                 st.info("Nenhum pagamento registrado.")
 
@@ -197,19 +194,18 @@ with t_dash:
             df['mes'] = df['dt'].dt.strftime('%m/%Y')
             evol = df.groupby('mes')['valor'].sum().reset_index()
             fig_bar = px.bar(evol, x='mes', y='valor', text_auto='.2s', color_discrete_sequence=['#4F8BF9'])
-            fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), xaxis_title="", yaxis_title="")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            fig_bar.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), xaxis_title="", yaxis_title="")
+            st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
 
         with tab_g3:
             setor = df.groupby('categoria')['valor'].sum().reset_index()
             fig_pie = px.pie(setor, values='valor', names='categoria', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), showlegend=False)
+            fig_pie.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), showlegend=False)
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, use_container_width=True, config=mobile_config)
 
         st.divider()
         
-        # Filtros e Lista
         f_col1, f_col2, f_col3 = st.columns(3)
         filtro_status = st.radio("Filtro:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
         
@@ -219,19 +215,14 @@ with t_dash:
 
         for _, row in df_view.iterrows():
             with st.container(border=True):
-                # SOTA Mobile: Card Vertical Redesenhado
                 status_icon = "✅" if row['pago'] else "⏳"
                 tag_responsavel = f"| 👤 {row['quem_pagou']}" if row['quem_pagou'] != "" else ""
                 classe_cor = "valor-pago" if row['pago'] else "valor-pendente"
                 
-                # Cabeçalho do Card
                 st.caption(f"{status_icon} {row['data']} | 🏷️ {row['categoria']} {tag_responsavel}")
                 st.markdown(f"**{row['descricao']}**")
-                
-                # Valor Destaque
                 st.markdown(f"<p class='valor-card {classe_cor}'>R$ {row['valor']:,.2f}</p>", unsafe_allow_html=True)
                 
-                # Ações na Base
                 if not row['pago']:
                     btn_c1, btn_c2 = st.columns(2)
                     with btn_c1:
