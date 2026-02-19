@@ -91,7 +91,7 @@ with tab1:
 
         if uploaded_file:
             if uploaded_file.type == "application/pdf":
-                img = convert_from_bytes(uploaded_file.read(), dpi=250)[0]
+               img = convert_from_bytes(uploaded_file.read(), dpi=250, poppler_path="/usr/bin")[0]
             else:
                 img = Image.open(uploaded_file)
             st.image(img, width=250)
