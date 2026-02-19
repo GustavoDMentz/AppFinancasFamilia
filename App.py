@@ -48,7 +48,7 @@ def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
     if parcelas < 1:
         parcelas = 1
     
-    valor_parcela = valor_total / parcelas if parcelas > 0 else valor_total
+    valor_parcela = round(valor_total / parcelas, 2)  # Arredonda para 2 casas
     
     data_inicial = datetime.strptime(data_doc, "%d/%m/%Y")
     
@@ -100,12 +100,20 @@ st.markdown("""
         width: 100%;
         height: 3rem;
         font-size: 1.2rem;
+        margin-top: 1rem;
     }
     .stExpander {
         font-size: 1.1rem;
+        margin-bottom: 1rem;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 1rem;
+    }
+    .stForm > div {
+        gap: 1rem !important;
+    }
+    label {
+        font-size: 1.1rem !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -150,6 +158,7 @@ with tab_ocr:
                         'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
                         'desc': desc, 'cat': cat,
                         'quem_pagou': "",
+                        'parcelado': False,
                         'parcelas': 1
                     }
                     st.rerun()
@@ -159,7 +168,7 @@ with tab_ocr:
 with tab_manual:
     st.subheader("⌨️ Novo Lançamento")
     if st.button("Limpar formulário"):
-        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelas': 1}
+        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
         st.rerun()
 
     with st.form("form_financeiro"):
@@ -171,11 +180,11 @@ with tab_manual:
         f_data = c_d.text_input("Primeiro vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
         f_valor = c_v.text_input("Valor TOTAL R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-        # Nova UX: Checkbox + condicional
-        f_parcelado = st.checkbox("Parcelado?", value=False)
+        # Checkbox retangular + condicional
+        f_parcelado = st.checkbox("Parcelado?", value=st.session_state.get('dados_temp', {}).get('parcelado', False))
         f_parcelas = 1
         if f_parcelado:
-            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=12, step=1, help="Valor total será dividido igualmente.")
+            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=12, step=1, help="Valor total será dividido igualmente entre as parcelas.")
 
         f_pago = st.checkbox("Primeira parcela já paga")
         f_quem_pagou = st.text_input("Quem pagou a primeira parcela? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
@@ -187,7 +196,7 @@ with tab_manual:
                 salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, f_parcelas)
                 st.success(f"{f_parcelas} lançamento(s) salvo(s)!")
                 st.balloons()
-                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelas': 1}
+                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
 
 with tab_dashboard:
     try:
