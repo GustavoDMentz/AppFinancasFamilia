@@ -76,25 +76,41 @@ def acoes_db(id_reg, acao, quem_pagou=None):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
-            # Pega a descrição da parcela clicada para agrupar
-            desc_result = conn.execute(text('SELECT descricao FROM "Lançamentos" WHERE id = :id'), {"id": id_reg}).fetchone()
-            if desc_result:
-                # Extrai a parte comum da descrição (depois do " - ")
-                desc_completa = desc_result[0]
-                if " - " in desc_completa:
-                    desc_base = desc_completa.split(" - ", 1)[1]
-                else:
-                    desc_base = desc_completa
+            # Pega a parcela atual
+            parcela_atual = conn.execute(text('SELECT descricao, data FROM "Lançamentos" WHERE id = :id'), {"id": id_reg}).fetchone()
+            if not parcela_atual:
+                return
 
-                # Atualiza TODAS as parcelas pendentes com a mesma descrição base
-                conn.execute(text("""
-                    UPDATE "Lançamentos"
-                    SET pago = TRUE, quem_pagou = :quem
-                    WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE
-                """), {
-                    "quem": quem_pagou.strip() if quem_pagou else None,
-                    "desc_base": desc_base
-                })
+            desc_completa = parcela_atual[0]
+            data_atual = parcela_atual[1]
+
+            # Extrai a parte comum da descrição (depois do " - ")
+            if " - " in desc_completa:
+                desc_base = desc_completa.split(" - ", 1)[1]
+            else:
+                desc_base = desc_completa
+
+            # Verifica se há parcelas anteriores pendentes da mesma compra
+            anteriores_pendentes = conn.execute(text("""
+                SELECT COUNT(*) FROM "Lançamentos"
+                WHERE descricao LIKE '%' || :desc_base || '%'
+                  AND pago = FALSE
+                  AND data < :data_atual
+            """), {"desc_base": desc_base, "data_atual": data_atual}).fetchone()[0]
+
+            if anteriores_pendentes > 0:
+                st.error("Você deve pagar primeiro as parcelas anteriores pendentes!")
+                return
+
+            # Atualiza TODAS as parcelas pendentes da mesma compra
+            conn.execute(text("""
+                UPDATE "Lançamentos"
+                SET pago = TRUE, quem_pagou = :quem
+                WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE
+            """), {
+                "quem": quem_pagou.strip() if quem_pagou else None,
+                "desc_base": desc_base
+            })
         elif acao == "excluir":
             conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
         conn.commit()
@@ -286,11 +302,23 @@ with tab_dashboard:
             with st.expander(f"{status}{quem} | {r['data']} | {r['descricao']} | R$ {r['valor']:.2f}"):
                 c1, c2 = st.columns(2)
                 if not r['pago']:
-                    if c1.button("Confirmar Pagamento (aplica em todas)", key=f"pay{r['id']}"):
-                        quem_pagou = st.text_input("Quem pagou/pagará todas as parcelas restantes?", key=f"quem{r['id']}")
-                        if st.button("Confirmar", key=f"conf{r['id']}"):
-                            acoes_db(r['id'], "pagar", quem_pagou)
-                            st.rerun()
+                    # Verifica se há parcelas anteriores pendentes
+                    desc_completa = r['descricao']
+                    if " - " in desc_completa:
+                        desc_base = desc_completa.split(" - ", 1)[1]
+                    else:
+                        desc_base = desc_completa
+
+                    anteriores = df[(df['descricao'].str.contains(desc_base, na=False)) & (df['pago'] == False) & (df['dt'] < r['dt'])]
+
+                    if not anteriores.empty:
+                        st.warning("Pague primeiro as parcelas anteriores pendentes!")
+                    else:
+                        if c1.button("Confirmar Pagamento (aplica em todas)", key=f"pay{r['id']}"):
+                            quem_pagou = st.text_input("Quem pagou/pagará todas as parcelas restantes?", key=f"quem{r['id']}")
+                            if st.button("Confirmar", key=f"conf{r['id']}"):
+                                acoes_db(r['id'], "pagar", quem_pagou)
+                                st.rerun()
                 if c2.button("Excluir", key=f"del{r['id']}"):
                     acoes_db(r['id'], "excluir")
                     st.rerun()
