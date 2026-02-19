@@ -11,7 +11,31 @@ from sqlalchemy import create_engine, text
 import pytesseract
 from pdf2image import convert_from_bytes
 
-# --- CONFIGURAÇÃO DB SUPABASE ---
+# ==========================================
+# CONFIGURAÇÃO DA PÁGINA (Deve ser a 1ª linha)
+# ==========================================
+st.set_page_config(
+    page_title="Terminal Financeiro",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+    page_icon="💸"
+)
+
+# ==========================================
+# CUSTOM CSS (Design System Minimalista)
+# ==========================================
+st.markdown("""
+    <style>
+    /* Ajustes refinados de UI */
+    .stTabs [data-baseweb="tab-list"] { gap: 1rem; }
+    .stTabs [data-baseweb="tab"] { font-weight: 600; font-size: 1.05rem; }
+    div[data-testid="stMetricValue"] { font-size: 2rem !important; }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# CAMADA DE BANCO DE DADOS (Preservada)
+# ==========================================
 @st.cache_resource
 def get_engine():
     return create_engine(st.secrets["connections"]["financeiro"]["url"])
@@ -35,39 +59,31 @@ def init_db():
 
 def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
     engine = get_engine()
-    
     valor_total = 0.0
     try:
         valor_str = str(valor).strip()
         if valor_str:
             valor_total = float(valor_str.replace('.', '').replace(',', '.'))
     except (ValueError, AttributeError):
-        st.warning(f"Valor inválido ou vazio: '{valor}'. Salvo como R$ 0,00.")
+        st.toast(f"Valor inválido: '{valor}'. Salvo como R$ 0,00.", icon="⚠️")
         valor_total = 0.0
     
-    if parcelas < 1:
-        parcelas = 1
-    
+    parcelas = max(1, parcelas)
     valor_parcela = round(valor_total / parcelas, 2)
-    
     data_inicial = datetime.strptime(data_doc, "%d/%m/%Y")
     
     with engine.connect() as conn:
         for i in range(parcelas):
             parcela_num = i + 1
             desc_parcela = f"Parcela {parcela_num}/{parcelas} - {desc}" if parcelas > 1 else desc
-            data_parcela = data_inicial + relativedelta(months=i)
-            data_parcela_str = data_parcela.strftime("%d/%m/%Y")
+            data_parcela = (data_inicial + relativedelta(months=i)).strftime("%d/%m/%Y")
             
             conn.execute(text("""
                 INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago, quem_pagou)
                 VALUES (:data, :valor, :descricao, :categoria, :pago, :quem_pagou)
             """), {
-                "data": data_parcela_str,
-                "valor": valor_parcela,
-                "descricao": desc_parcela,
-                "categoria": cat,
-                "pago": pago if parcela_num == 1 else False,
+                "data": data_parcela, "valor": valor_parcela, "descricao": desc_parcela,
+                "categoria": cat, "pago": pago if parcela_num == 1 else False,
                 "quem_pagou": quem_pagou if parcela_num == 1 else None
             })
         conn.commit()
@@ -76,251 +92,242 @@ def acoes_db(id_reg, acao, quem_pagou=None):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
-            # Pega a parcela atual
             parcela_atual = conn.execute(text('SELECT descricao, data FROM "Lançamentos" WHERE id = :id'), {"id": id_reg}).fetchone()
-            if not parcela_atual:
-                return
+            if not parcela_atual: return False, "Lançamento não encontrado."
 
-            desc_completa = parcela_atual[0]
-            data_atual = parcela_atual[1]
+            desc_completa, data_atual = parcela_atual
+            desc_base = desc_completa.split(" - ", 1)[1] if " - " in desc_completa else desc_completa
 
-            # Extrai a parte comum da descrição (depois do " - ")
-            if " - " in desc_completa:
-                desc_base = desc_completa.split(" - ", 1)[1]
-            else:
-                desc_base = desc_completa
-
-            # Verifica se há parcelas anteriores pendentes da mesma compra
             anteriores_pendentes = conn.execute(text("""
                 SELECT COUNT(*) FROM "Lançamentos"
-                WHERE descricao LIKE '%' || :desc_base || '%'
-                  AND pago = FALSE
-                  AND data < :data_atual
+                WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE AND data < :data_atual
             """), {"desc_base": desc_base, "data_atual": data_atual}).fetchone()[0]
 
             if anteriores_pendentes > 0:
-                st.error("Você deve pagar primeiro as parcelas anteriores pendentes!")
-                return
+                return False, "Você deve pagar primeiro as parcelas anteriores pendentes!"
 
-            # Atualiza TODAS as parcelas pendentes da mesma compra
             conn.execute(text("""
-                UPDATE "Lançamentos"
-                SET pago = TRUE, quem_pagou = :quem
+                UPDATE "Lançamentos" SET pago = TRUE, quem_pagou = :quem
                 WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE
-            """), {
-                "quem": quem_pagou.strip() if quem_pagou else None,
-                "desc_base": desc_base
-            })
+            """), {"quem": quem_pagou.strip() if quem_pagou else None, "desc_base": desc_base})
+        
         elif acao == "excluir":
             conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
         conn.commit()
+    return True, "Ação realizada com sucesso."
 
-# --- APP STREAMLIT ---
-st.set_page_config(
-    page_title="Terminal Financeiro Família",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-    page_icon="💰"
-)
+# ==========================================
+# MODAIS NATIVOS (SOTA para ações em listas)
+# ==========================================
+@st.dialog("Confirmar Pagamento")
+def modal_pagamento(lancamento_id, descricao):
+    st.write(f"Você está pagando: **{descricao}**")
+    st.info("Caso seja uma compra parcelada, isso quitará TODAS as parcelas restantes desta compra.")
+    quem_pagou = st.text_input("Quem realizou o pagamento?")
+    
+    if st.button("Confirmar Pagamento", type="primary", use_container_width=True):
+        sucesso, msg = acoes_db(lancamento_id, "pagar", quem_pagou)
+        if sucesso:
+            st.session_state['refresh'] = True
+            st.rerun()
+        else:
+            st.error(msg)
 
-init_db()
-
-st.markdown("""
-    <style>
-    .stButton > button {
-        width: 100%;
-        height: 3.2rem;
-        font-size: 1.2rem;
-        margin-top: 1rem;
-    }
-    .stExpander {
-        font-size: 1.1rem;
-        margin-bottom: 1rem;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 0.8rem;
-        flex-wrap: wrap;
-    }
-    .stForm > div {
-        gap: 1.2rem !important;
-    }
-    label {
-        font-size: 1.1rem !important;
-        font-weight: 500;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-st.title("💰 Gestão Financeira Família")
-
-tab_ocr, tab_contas, tab_cartao, tab_dashboard = st.tabs([
-    "Scanner OCR",
-    "Contas Fixas / Consumo",
-    "Compras no Cartão (Parceladas)",
-    "Dashboard & Gestão"
-])
-
-with tab_ocr:
-    st.subheader("📷 Scanner de Boletos (Tesseract)")
-    uploaded_file = st.file_uploader("Envie o boleto (PDF ou imagem)", type=["png", "jpg", "jpeg", "pdf"])
-
-    if uploaded_file:
-        try:
-            if uploaded_file.type == "application/pdf":
-                images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
-                img = images[0]
-            else:
-                img = Image.open(uploaded_file)
-            st.image(img, use_column_width=True)
-
-            if st.button("🔍 Escanear Boleto"):
-                with st.spinner("Lendo boleto..."):
-                    txt = pytesseract.image_to_string(img, lang='por', config='--psm 6')
-                    txt = txt.lower()
-
-                    desc, cat = "Outros", "Outros"
-                    if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
-                    elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
-
-                    vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
-                    nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
-                    v_calc = nums[0] if nums else 0.0
-
-                    datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                    hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                    dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
-                    venc = max(dts) if dts else hoje
-
-                    st.session_state['dados_temp'] = {
-                        'data': venc.strftime("%d/%m/%Y"),
-                        'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
-                        'desc': desc, 'cat': cat,
-                        'quem_pagou': "",
-                        'parcelado': False,
-                        'parcelas': 1
-                    }
-                    st.rerun()
-        except Exception as e:
-            st.error(f"Erro ao ler boleto: {str(e)}. Tente uma imagem clara ou PDF de 1 página.")
-
-with tab_contas:
-    st.subheader("Contas Fixas / Consumo")
-    st.info("Luz, água, condomínio, mercado à vista... (sem parcelamento)")
-
-    if st.button("Limpar formulário"):
-        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
+@st.dialog("Excluir Lançamento")
+def modal_exclusao(lancamento_id):
+    st.warning("Tem certeza que deseja excluir este lançamento? Esta ação não pode ser desfeita.")
+    if st.button("Sim, excluir", type="primary", use_container_width=True):
+        acoes_db(lancamento_id, "excluir")
+        st.session_state['refresh'] = True
         st.rerun()
 
-    with st.form("form_contas"):
-        f_desc = st.text_input("Descrição (ex: Conta de Luz CEEE)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
-        lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
-        f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state.get('dados_temp', {}).get('cat', 'Outros')) if st.session_state.get('dados_temp', {}).get('cat') in lista_cats else 0)
+# ==========================================
+# INICIALIZAÇÃO DE ESTADO
+# ==========================================
+init_db()
+if 'dados_temp' not in st.session_state:
+    st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
 
-        c_d, c_v = st.columns(2)
-        f_data = c_d.text_input("Vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
-        f_valor = c_v.text_input("Valor R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
+# ==========================================
+# UI PRINCIPAL
+# ==========================================
+st.title("💸 Gestão Financeira Inteligente")
+st.markdown("Bem-vindo ao seu terminal financeiro. Escaneie boletos ou insira dados manualmente.")
 
-        f_pago = st.checkbox("Já paguei")
-        f_quem_pagou = st.text_input("Quem pagou? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
+t_ocr, t_contas, t_cartao, t_dash = st.tabs(["📷 Scanner OCR", "🧾 Contas à Vista", "💳 Cartão (Parcelas)", "📊 Dashboard"])
 
-        if st.form_submit_button("✅ Salvar Conta"):
-            if not f_valor.strip():
-                st.error("Preencha o valor!")
-            else:
-                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, parcelas=1)
-                st.success("Conta salva!")
-                st.balloons()
-                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
+# --- TAB 1: OCR ---
+with t_ocr:
+    st.markdown("#### Scanner Inteligente de Boletos")
+    uploaded_file = st.file_uploader("Envie o boleto (PDF ou imagem)", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed")
 
-with tab_cartao:
-    st.subheader("Compras Parceladas no Cartão")
-    st.info("Celular, supermercado parcelado, etc. (registra todas as parcelas futuras)")
+    if uploaded_file:
+        col_img, col_acao = st.columns([1, 1])
+        try:
+            with col_img:
+                if uploaded_file.type == "application/pdf":
+                    images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
+                    img = images[0]
+                else:
+                    img = Image.open(uploaded_file)
+                st.image(img, use_column_width=True, caption="Documento Original")
 
-    with st.form("form_cartao"):
-        f_desc = st.text_input("Descrição (ex: Celular 10x no cartão)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
-        lista_cats = ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"]
-        f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state.get('dados_temp', {}).get('cat', 'Outros')) if st.session_state.get('dados_temp', {}).get('cat') in lista_cats else 0)
+            with col_acao:
+                if st.button("🔍 Extrair Dados", type="primary", use_container_width=True):
+                    with st.status("Analisando documento...", expanded=True) as status:
+                        st.write("Executando OCR...")
+                        txt = pytesseract.image_to_string(img, lang='por', config='--psm 6').lower()
+                        
+                        st.write("Classificando categoria...")
+                        desc, cat = "Outros", "Outros"
+                        if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                        elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
 
-        c_d, c_v = st.columns(2)
-        f_data = c_d.text_input("Data da primeira parcela (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
-        f_valor = c_v.text_input("Valor TOTAL da compra R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
+                        st.write("Extraindo valores e datas...")
+                        vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
+                        nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+                        v_calc = nums[0] if nums else 0.0
 
-        f_parcelado = st.checkbox("Parcelado?", value=True, help="Marque se a compra está em parcelas (padrão no cartão).")
-        f_parcelas = 1
-        if f_parcelado:
-            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=10, step=1)
+                        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                        hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                        dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
+                        venc = max(dts) if dts else hoje
 
-        f_pago = st.checkbox("Primeira parcela já veio na fatura e foi paga")
-        f_quem_pagou = st.text_input("Quem pagou/pagará as parcelas? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
+                        st.session_state['dados_temp'] = {
+                            'data': venc.strftime("%d/%m/%Y"),
+                            'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
+                            'desc': desc, 'cat': cat, 'quem_pagou': "", 'parcelado': False, 'parcelas': 1
+                        }
+                        status.update(label="Extração Concluída!", state="complete", expanded=False)
+                    st.success("Dados preenchidos nas abas de formulário!")
+        except Exception as e:
+            st.error(f"Erro ao processar: {str(e)}")
 
-        if st.form_submit_button("✅ Salvar Compra(s) no Cartão"):
-            if not f_valor.strip():
-                st.error("Preencha o valor total da compra!")
-            else:
-                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, f_parcelas)
-                st.success(f"{f_parcelas} parcela(s) registrada(s)!")
-                st.balloons()
-                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
+# --- TAB 2: CONTAS À VISTA ---
+with t_contas:
+    st.markdown("#### Nova Conta Fixa / Consumo")
+    with st.container(border=True):
+        with st.form("form_contas", clear_on_submit=True):
+            f_desc = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
+            lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
+            
+            # Tratamento de fallback seguro para o selectbox
+            cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
+            idx_cat = lista_cats.index(cat_atual) if cat_atual in lista_cats else lista_cats.index("Outros")
+            f_cat = st.selectbox("Categoria", lista_cats, index=idx_cat)
 
-with tab_dashboard:
-    try:
-        df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {str(e)}")
-        df = pd.DataFrame()
+            c1, c2 = st.columns(2)
+            f_data = c1.text_input("Vencimento (dd/mm/aaaa)", value=st.session_state['dados_temp'].get('data'))
+            f_valor = c2.text_input("Valor R$", value=st.session_state['dados_temp'].get('valor'))
+
+            c3, c4 = st.columns(2)
+            f_pago = c3.checkbox("Já paguei")
+            f_quem_pagou = c4.text_input("Quem pagou?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
+
+            if st.form_submit_button("✅ Salvar Conta", type="primary", use_container_width=True):
+                if not f_valor.strip():
+                    st.error("Preencha o valor!")
+                else:
+                    salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
+                    st.toast("Conta salva com sucesso!", icon="🎉")
+
+# --- TAB 3: CARTÃO / PARCELAS ---
+with t_cartao:
+    st.markdown("#### Nova Compra Parcelada")
+    with st.container(border=True):
+        with st.form("form_cartao", clear_on_submit=True):
+            f_desc_c = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
+            lista_cats_c = ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"]
+            
+            cat_atual_c = st.session_state['dados_temp'].get('cat', 'Outros')
+            idx_cat_c = lista_cats_c.index(cat_atual_c) if cat_atual_c in lista_cats_c else lista_cats_c.index("Outros")
+            f_cat_c = st.selectbox("Categoria", lista_cats_c, index=idx_cat_c)
+
+            c1, c2, c3 = st.columns([2, 2, 1])
+            f_data_c = c1.text_input("Data da 1ª Parcela", value=st.session_state['dados_temp'].get('data'))
+            f_valor_c = c2.text_input("Valor TOTAL da Compra R$", value=st.session_state['dados_temp'].get('valor'))
+            f_parcelas_c = c3.number_input("Qtd Parcelas", min_value=2, max_value=36, value=10, step=1)
+
+            c4, c5 = st.columns(2)
+            f_pago_c = c4.checkbox("1ª parcela já veio e foi paga")
+            f_quem_pagou_c = c5.text_input("Quem pagou/pagará?", value=st.session_state['dados_temp'].get('quem_pagou', ''))
+
+            if st.form_submit_button("✅ Salvar Compra Parcelada", type="primary", use_container_width=True):
+                if not f_valor_c.strip():
+                    st.error("Preencha o valor total!")
+                else:
+                    salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
+                    st.toast(f"{f_parcelas_c} parcelas registradas!", icon="💳")
+
+# --- TAB 4: DASHBOARD ---
+with t_dash:
+    df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
 
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
-
-        pendente_total = df[df['pago'] == False]['valor'].sum()
-        st.info(f"💰 Contas pendentes totais: **R$ {pendente_total:,.2f}**")
-
-        pagos_por_pessoa = df[df['pago'] == True].groupby('quem_pagou')['valor'].sum().reset_index()
-        if not pagos_por_pessoa.empty:
-            st.subheader("Pagamentos por pessoa")
-            st.dataframe(pagos_por_pessoa.style.format({"valor": "R$ {:,.2f}"}))
-            st.info(f"Total pago até agora: **R$ {pagos_por_pessoa['valor'].sum():,.2f}**")
-
-        g1, g2 = st.columns(2)
-        with g1:
-            st.subheader("Gastos Mensais")
-            df['mes'] = df['dt'].dt.strftime('%m/%Y')
-            evol = df.groupby('mes')['valor'].sum().reset_index()
-            st.bar_chart(evol.set_index('mes'))
-
-        with g2:
-            st.subheader("Divisão por Categoria")
-            setor = df.groupby('categoria')['valor'].sum().reset_index()
-            fig = px.pie(setor, values='valor', names='categoria', hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe)
-            st.plotly_chart(fig, use_container_width=True)
+        
+        # SOTA: Métricas superiores
+        m1, m2, m3 = st.columns(3)
+        total_pendente = df[df['pago'] == False]['valor'].sum()
+        total_pago = df[df['pago'] == True]['valor'].sum()
+        qtd_pendentes = len(df[df['pago'] == False])
+        
+        m1.metric("Total Pendente", f"R$ {total_pendente:,.2f}")
+        m2.metric("Total Pago", f"R$ {total_pago:,.2f}")
+        m3.metric("Contas a Pagar", f"{qtd_pendentes} itens")
 
         st.divider()
-        st.subheader("Lista de Lançamentos")
-        for i, r in df.sort_values('dt', ascending=False).iterrows():
-            status = "✅ PAGO" if r['pago'] else "⏳ PENDENTE"
-            quem = f" | Pago por: {r['quem_pagou']}" if r['pago'] and r['quem_pagou'] else ""
-            with st.expander(f"{status}{quem} | {r['data']} | {r['descricao']} | R$ {r['valor']:.2f}"):
-                c1, c2 = st.columns(2)
-                if not r['pago']:
-                    # Verifica se há parcelas anteriores pendentes
-                    desc_completa = r['descricao']
-                    if " - " in desc_completa:
-                        desc_base = desc_completa.split(" - ", 1)[1]
-                    else:
-                        desc_base = desc_completa
 
-                    anteriores = df[(df['descricao'].str.contains(desc_base, na=False)) & (df['pago'] == False) & (df['dt'] < r['dt'])]
+        # SOTA: Gráficos Plotly Clean
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            st.markdown("##### 📈 Gastos por Mês")
+            df['mes'] = df['dt'].dt.strftime('%m/%Y')
+            evol = df.groupby('mes')['valor'].sum().reset_index()
+            fig_bar = px.bar(evol, x='mes', y='valor', text_auto='.2s', color_discrete_sequence=['#4F8BF9'])
+            fig_bar.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), xaxis_title="", yaxis_title="")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-                    if not anteriores.empty:
-                        st.warning("Pague primeiro as parcelas anteriores pendentes!")
-                    else:
-                        if c1.button("Confirmar Pagamento (aplica em todas)", key=f"pay{r['id']}"):
-                            quem_pagou = st.text_input("Quem pagou/pagará todas as parcelas restantes?", key=f"quem{r['id']}")
-                            if st.button("Confirmar", key=f"conf{r['id']}"):
-                                acoes_db(r['id'], "pagar", quem_pagou)
-                                st.rerun()
-                if c2.button("Excluir", key=f"del{r['id']}"):
-                    acoes_db(r['id'], "excluir")
-                    st.rerun()
+        with c2:
+            st.markdown("##### 🍕 Divisão por Categoria")
+            setor = df.groupby('categoria')['valor'].sum().reset_index()
+            fig_pie = px.pie(setor, values='valor', names='categoria', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0))
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        st.divider()
+        st.markdown("### 📋 Gestão de Lançamentos")
+        
+        # Filtros SOTA
+        f_col1, f_col2 = st.columns([1, 4])
+        filtro_status = f_col1.radio("Filtrar por:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
+        
+        df_view = df.sort_values('dt', ascending=True)
+        if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
+        elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
+
+        # Renderização da lista usando st.container para UI limpa
+        for _, row in df_view.iterrows():
+            with st.container(border=True):
+                col_info, col_valor, col_acoes = st.columns([5, 2, 2])
+                
+                status_icon = "✅" if row['pago'] else "⏳"
+                status_color = "green" if row['pago'] else "orange"
+                
+                with col_info:
+                    st.markdown(f"**{row['descricao']}**")
+                    st.caption(f"{status_icon} :{status_color}[{row['data']}] | 🏷️ {row['categoria']} " + (f"| 👤 {row['quem_pagou']}" if row['pago'] else ""))
+                
+                with col_valor:
+                    st.markdown(f"<h4 style='margin:0; padding-top:0.5rem;'>R$ {row['valor']:,.2f}</h4>", unsafe_allow_html=True)
+                
+                with col_acoes:
+                    # Uso das Dialogs para evitar o bug de nested buttons
+                    if not row['pago']:
+                        if st.button("Pagar", key=f"pay_{row['id']}", use_container_width=True):
+                            modal_pagamento(row['id'], row['descricao'])
+                    if st.button("Excluir", key=f"del_{row['id']}", use_container_width=True):
+                        modal_exclusao(row['id'])
+
     else:
-        st.info("Nenhum lançamento ainda. Comece adicionando no scanner ou nas abas de contas/cartão.")
+        st.info("Nenhum lançamento no banco de dados. Cadastre sua primeira conta nas abas acima!", icon="ℹ️")
