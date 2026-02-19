@@ -18,7 +18,6 @@ def get_engine():
 def init_db():
     engine = get_engine()
     with engine.connect() as conn:
-        # Cria tabela se não existir (já deve existir, mas segurança)
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS "Lançamentos" (
                 id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -32,7 +31,44 @@ def init_db():
         """))
         conn.commit()
 
-# --- RESTANTE DO CÓDIGO (sem mudanças) ---
+def salvar_no_db(data_doc, valor, desc, cat, pago):
+    engine = get_engine()
+    
+    # Valor sempre definido, com fallback
+    valor_limpo = 0.0
+    try:
+        valor_str = str(valor).strip()  # Converte para string e remove espaços
+        if valor_str:  # Evita erro em vazio
+            valor_limpo = float(valor_str.replace('.', '').replace(',', '.'))
+    except (ValueError, AttributeError):
+        st.warning(f"Valor inválido ou vazio: '{valor}'. Salvo como R$ 0,00.")
+    
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago)
+            VALUES (:data, :valor, :descricao, :categoria, :pago)
+        """), {
+            "data": data_doc,
+            "valor": valor_limpo,
+            "descricao": desc,
+            "categoria": cat,
+            "pago": pago
+        })
+        conn.commit()
+
+def acoes_db(id_reg, acao):
+    engine = get_engine()
+    with engine.connect() as conn:
+        if acao == "pagar":
+            conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE WHERE id = :id'), {"id": id_reg})
+        elif acao == "excluir":
+            conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
+        conn.commit()
+
+# --- APP STREAMLIT ---
+st.set_page_config(page_title="Terminal Financeiro v3.6 - Supabase", layout="wide")
+init_db()
+
 @st.cache_resource
 def load_model():
     return easyocr.Reader(['pt'], gpu=os.path.exists('/opt/bin/nvidia-smi'))
@@ -102,9 +138,12 @@ with tab1:
             f_pago = st.checkbox("Já paguei este valor")
 
             if st.form_submit_button("✅ SALVAR NO SISTEMA"):
-                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago)
-                st.success("Registrado!")
-                st.balloons()
+                if not f_valor.strip():
+                    st.error("Preencha o valor antes de salvar!")
+                else:
+                    salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago)
+                    st.success("Registrado!")
+                    st.balloons()
 
 with tab2:
     try:
