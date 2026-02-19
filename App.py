@@ -86,7 +86,6 @@ def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
                 "descricao": desc_parcela,
                 "categoria": cat, 
                 "pago": pago if parcela_num == 1 else False,
-                # ATUALIZAÇÃO 1: O responsável é salvo para TODAS as parcelas
                 "quem_pagou": quem_pagou.strip() if quem_pagou else None
             })
         conn.commit()
@@ -101,7 +100,6 @@ def acoes_db(id_reg, acao):
             desc_completa, data_atual = parcela_atual
             desc_base = desc_completa.split(" - ", 1)[1] if " - " in desc_completa else desc_completa
 
-            # Trava de segurança: impede pagar parcela 3 se a 2 estiver pendente
             anteriores_pendentes = conn.execute(text("""
                 SELECT COUNT(*) FROM "Lançamentos"
                 WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE AND data < :data_atual
@@ -110,7 +108,6 @@ def acoes_db(id_reg, acao):
             if anteriores_pendentes > 0:
                 return False, "Você deve pagar primeiro a(s) parcela(s) anterior(es) desta compra!"
 
-            # ATUALIZAÇÃO 2: Atualiza APENAS o ID específico (quita 1 mês só)
             conn.execute(text("""
                 UPDATE "Lançamentos" SET pago = TRUE
                 WHERE id = :id
@@ -280,7 +277,9 @@ with t_dash:
 
         st.divider()
 
-        c1, c2 = st.columns([3, 2])
+        # Layout moderno SOTA: 3 Colunas para os Gráficos
+        c1, c2, c3 = st.columns(3)
+        
         with c1:
             st.markdown("##### 📈 Gastos por Mês")
             df['mes'] = df['dt'].dt.strftime('%m/%Y')
@@ -290,10 +289,34 @@ with t_dash:
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with c2:
+            st.markdown("##### 👤 Total Pago por Pessoa")
+            # Trata nulos e filtra apenas contas já pagas e com nome válido
+            df['quem_pagou'] = df['quem_pagou'].fillna("").astype(str).str.strip()
+            df_pessoas = df[(df['pago'] == True) & (df['quem_pagou'] != "")]
+            
+            if not df_pessoas.empty:
+                soma_pessoas = df_pessoas.groupby('quem_pagou')['valor'].sum().reset_index()
+                soma_pessoas = soma_pessoas.sort_values('valor', ascending=True) # Ascendente para a barra horizontal ficar correta
+                
+                fig_pessoas = px.bar(
+                    soma_pessoas, x='valor', y='quem_pagou', text='valor', 
+                    color='quem_pagou', color_discrete_sequence=px.colors.qualitative.Set2, orientation='h'
+                )
+                fig_pessoas.update_traces(texttemplate='R$ %{text:,.2f}', textposition='inside')
+                fig_pessoas.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0),
+                    xaxis_title="", yaxis_title="", showlegend=False, xaxis=dict(showticklabels=False)
+                )
+                st.plotly_chart(fig_pessoas, use_container_width=True)
+            else:
+                st.info("Nenhum pagamento registrado no nome de alguém.", icon="👤")
+
+        with c3:
             st.markdown("##### 🍕 Divisão por Categoria")
             setor = df.groupby('categoria')['valor'].sum().reset_index()
             fig_pie = px.pie(setor, values='valor', names='categoria', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0))
+            fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_pie, use_container_width=True)
 
         st.divider()
@@ -312,9 +335,7 @@ with t_dash:
                 
                 status_icon = "✅" if row['pago'] else "⏳"
                 status_color = "green" if row['pago'] else "orange"
-                
-                # Exibe o responsável mesmo que a conta ainda não esteja paga
-                tag_responsavel = f"| 👤 {row['quem_pagou']}" if pd.notna(row['quem_pagou']) and str(row['quem_pagou']).strip() else ""
+                tag_responsavel = f"| 👤 {row['quem_pagou']}" if row['quem_pagou'] != "" else ""
                 
                 with col_info:
                     st.markdown(f"**{row['descricao']}**")
