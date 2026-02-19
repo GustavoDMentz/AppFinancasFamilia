@@ -5,3 +5,5 @@ plotly
 pillow
 pdf2image
 easyocr
+sqlalchemy
+psycopg2-binary  # driver PostgreSQL obrigatório para SQLAlchemy
