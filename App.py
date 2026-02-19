@@ -173,9 +173,11 @@ with tab_ocr:
             st.error(f"Erro ao ler boleto: {str(e)}. Tente uma imagem clara ou PDF de 1 página.")
 
 with tab_contas:
-    st.subheader("Contas Fixas / Consumo (luz, água, condomínio...)")
+    st.subheader("Contas Fixas / Consumo (luz, água, condomínio, mercado à vista...)")
+    st.info("Aqui não tem parcelamento — contas de casa são pagas de uma vez.")
+
     if st.button("Limpar formulário"):
-        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
+        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
         st.rerun()
 
     with st.form("form_contas"):
@@ -185,28 +187,23 @@ with tab_contas:
 
         c_d, c_v = st.columns(2)
         f_data = c_d.text_input("Vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
-        f_valor = c_v.text_input("Valor TOTAL R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
+        f_valor = c_v.text_input("Valor R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-        f_parcelado = st.checkbox("Parcelado?", value=False)
-        f_parcelas = 1
-        if f_parcelado:
-            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=12, step=1, help="Valor total será dividido igualmente.")
+        f_pago = st.checkbox("Já paguei")
+        f_quem_pagou = st.text_input("Quem pagou? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
 
-        f_pago = st.checkbox("Primeira parcela já paga")
-        f_quem_pagou = st.text_input("Quem pagou a primeira parcela? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
-
-        if st.form_submit_button("✅ Salvar Conta(s)"):
+        if st.form_submit_button("✅ Salvar Conta"):
             if not f_valor.strip():
-                st.error("Preencha o valor total!")
+                st.error("Preencha o valor!")
             else:
-                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, f_parcelas)
-                st.success(f"{f_parcelas} lançamento(s) salvo(s)!")
+                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, parcelas=1)  # Sempre 1 parcela
+                st.success("Conta salva!")
                 st.balloons()
-                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': '', 'parcelado': False, 'parcelas': 1}
+                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
 
 with tab_cartao:
     st.subheader("Compras Parceladas no Cartão")
-    st.info("Registre aqui compras feitas no cartão de crédito em parcelas. Elas aparecerão nas faturas futuras.")
+    st.info("Registre compras feitas no cartão de crédito em parcelas (incluindo supermercado parcelado).")
 
     with st.form("form_cartao"):
         f_desc = st.text_input("Descrição (ex: Celular 10x no cartão)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
@@ -217,10 +214,10 @@ with tab_cartao:
         f_data = c_d.text_input("Data da primeira parcela (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
         f_valor = c_v.text_input("Valor TOTAL da compra R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-        f_parcelado = st.checkbox("Parcelado?", value=True, help="A maioria das compras no cartão são parceladas.")
+        f_parcelado = st.checkbox("Parcelado?", value=True, help="Marque se a compra está em parcelas (padrão no cartão).")
         f_parcelas = 1
         if f_parcelado:
-            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=10, step=1)
+            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=10, step=1, help="Valor total será dividido igualmente.")
 
         f_pago = st.checkbox("Primeira parcela já veio na fatura e foi paga")
         f_quem_pagou = st.text_input("Quem pagou a primeira parcela? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
@@ -282,4 +279,4 @@ with tab_dashboard:
                     acoes_db(r['id'], "excluir")
                     st.rerun()
     else:
-        st.info("Nenhum lançamento ainda. Comece adicionando no manual ou scanner.")
+        st.info("Nenhum lançamento ainda. Comece adicionando no scanner ou nas abas de contas/cartão.")
