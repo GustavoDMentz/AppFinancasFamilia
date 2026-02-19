@@ -13,7 +13,6 @@ from sqlalchemy import create_engine, text
 # --- CONFIGURAÇÃO DB SUPABASE ---
 @st.cache_resource
 def get_engine():
-    # Lê do secrets.toml ou Streamlit Cloud secrets
     return create_engine(st.secrets["connections"]["financeiro"]["url"])
 
 def init_db():
@@ -33,39 +32,19 @@ def init_db():
         """))
         conn.commit()
 
-def salvar_no_db(data_doc, valor, desc, cat, pago):
-    engine = get_engine()
-    try:
-        valor_limpo = float(valor.replace('.', '').replace(',', '.'))
-    except:
-        valor_limpo = 0.0
-    
-    with engine.connect() as conn:
-        conn.execute(text("""
-            INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago)
-            VALUES (:data, :valor, :descricao, :categoria, :pago)
-        """), {
-            "data": data_doc,
-            "valor": valor_limpo,
-            "descricao": desc,
-            "categoria": cat,
-            "pago": pago  # True/False
-        })
-        conn.commit()
-
-def acoes_db(id_reg, acao):
+# --- DEBUG DE CONEXÃO (adicionei aqui para ver o erro real) ---
+st.subheader("Debug de Conexão Supabase")
+try:
     engine = get_engine()
     with engine.connect() as conn:
-        if acao == "pagar":
-            conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE WHERE id = :id'), {"id": id_reg})
-        elif acao == "excluir":
-            conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
-        conn.commit()
+        result = conn.execute(text("SELECT version();")).fetchone()
+        st.success(f"Conexão OK! Versão PostgreSQL: {result[0]}")
+except Exception as e:
+    st.error(f"Erro ao conectar ao Supabase: {str(e)}")
+    st.info("Copie o erro acima e cole aqui para debug. Prováveis causas: senha errada, role do pooler não sincronizado, URI incompleta ou SSL/porta errada.")
+    st.stop()  # Para o app não tentar continuar se o banco falhar
 
-# --- APP STREAMLIT ---
-st.set_page_config(page_title="Terminal Financeiro v3.6 - Supabase", layout="wide")
-init_db()
-
+# --- RESTANTE DO CÓDIGO (sem mudanças) ---
 @st.cache_resource
 def load_model():
     return easyocr.Reader(['pt'], gpu=os.path.exists('/opt/bin/nvidia-smi'))
@@ -140,7 +119,11 @@ with tab1:
                 st.balloons()
 
 with tab2:
-    df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
+    try:
+        df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
+    except Exception as e:
+        st.error(f"Erro ao carregar dados: {str(e)}")
+        df = pd.DataFrame()  # Evita crash total
 
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
