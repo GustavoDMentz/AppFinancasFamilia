@@ -76,10 +76,25 @@ def acoes_db(id_reg, acao, quem_pagou=None):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
-            conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE, quem_pagou = :quem WHERE id = :id'), {
-                "quem": quem_pagou.strip() if quem_pagou else None,
-                "id": id_reg
-            })
+            # Pega a descrição da parcela clicada para agrupar
+            desc_result = conn.execute(text('SELECT descricao FROM "Lançamentos" WHERE id = :id'), {"id": id_reg}).fetchone()
+            if desc_result:
+                # Extrai a parte comum da descrição (depois do " - ")
+                desc_completa = desc_result[0]
+                if " - " in desc_completa:
+                    desc_base = desc_completa.split(" - ", 1)[1]
+                else:
+                    desc_base = desc_completa
+
+                # Atualiza TODAS as parcelas pendentes com a mesma descrição base
+                conn.execute(text("""
+                    UPDATE "Lançamentos"
+                    SET pago = TRUE, quem_pagou = :quem
+                    WHERE descricao LIKE '%' || :desc_base || '%' AND pago = FALSE
+                """), {
+                    "quem": quem_pagou.strip() if quem_pagou else None,
+                    "desc_base": desc_base
+                })
         elif acao == "excluir":
             conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
         conn.commit()
@@ -196,7 +211,7 @@ with tab_contas:
             if not f_valor.strip():
                 st.error("Preencha o valor!")
             else:
-                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, parcelas=1)  # Sempre 1 parcela
+                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou, parcelas=1)
                 st.success("Conta salva!")
                 st.balloons()
                 st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
@@ -214,11 +229,10 @@ with tab_cartao:
         f_data = c_d.text_input("Data da primeira parcela (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
         f_valor = c_v.text_input("Valor TOTAL da compra R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-        # Checkbox retangular + condicional
         f_parcelado = st.checkbox("Parcelado?", value=True, help="Marque se a compra está em parcelas (padrão no cartão).")
         f_parcelas = 1
         if f_parcelado:
-            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=10, step=1, help="Valor total será dividido igualmente entre as parcelas.")
+            f_parcelas = st.number_input("Quantas parcelas?", min_value=2, max_value=36, value=10, step=1)
 
         f_pago = st.checkbox("Primeira parcela já veio na fatura e foi paga")
         f_quem_pagou = st.text_input("Quem pagou/pagará as parcelas? (nome)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
@@ -271,11 +285,12 @@ with tab_dashboard:
             quem = f" | Pago por: {r['quem_pagou']}" if r['pago'] and r['quem_pagou'] else ""
             with st.expander(f"{status}{quem} | {r['data']} | {r['descricao']} | R$ {r['valor']:.2f}"):
                 c1, c2 = st.columns(2)
-                if not r['pago'] and c1.button("Confirmar Pagamento", key=f"pay{r['id']}"):
-                    quem_pagou = st.text_input("Quem pagou?", key=f"quem{r['id']}")
-                    if st.button("Confirmar", key=f"conf{r['id']}"):
-                        acoes_db(r['id'], "pagar", quem_pagou)
-                        st.rerun()
+                if not r['pago']:
+                    if c1.button("Confirmar Pagamento (aplica em todas)", key=f"pay{r['id']}"):
+                        quem_pagou = st.text_input("Quem pagou/pagará todas as parcelas restantes?", key=f"quem{r['id']}")
+                        if st.button("Confirmar", key=f"conf{r['id']}"):
+                            acoes_db(r['id'], "pagar", quem_pagou)
+                            st.rerun()
                 if c2.button("Excluir", key=f"del{r['id']}"):
                     acoes_db(r['id'], "excluir")
                     st.rerun()
