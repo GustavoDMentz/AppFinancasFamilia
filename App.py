@@ -26,13 +26,15 @@ def init_db():
                 descricao TEXT,
                 categoria TEXT,
                 data_registro TIMESTAMPTZ DEFAULT NOW(),
-                pago BOOLEAN DEFAULT FALSE
+                pago BOOLEAN DEFAULT FALSE,
+                quem_pagou TEXT  -- Nova coluna para nome da pessoa que pagou
             )
         """))
         conn.commit()
 
-def salvar_no_db(data_doc, valor, desc, cat, pago):
+def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou=""):
     engine = get_engine()
+    
     valor_limpo = 0.0
     try:
         valor_str = str(valor).strip()
@@ -43,108 +45,136 @@ def salvar_no_db(data_doc, valor, desc, cat, pago):
     
     with engine.connect() as conn:
         conn.execute(text("""
-            INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago)
-            VALUES (:data, :valor, :descricao, :categoria, :pago)
+            INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago, quem_pagou)
+            VALUES (:data, :valor, :descricao, :categoria, :pago, :quem_pagou)
         """), {
             "data": data_doc,
             "valor": valor_limpo,
             "descricao": desc,
             "categoria": cat,
-            "pago": pago
+            "pago": pago,
+            "quem_pagou": quem_pagou.strip() if quem_pagou else None
         })
         conn.commit()
 
-def acoes_db(id_reg, acao):
+def acoes_db(id_reg, acao, quem_pagou=None):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
-            conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE WHERE id = :id'), {"id": id_reg})
+            # Atualiza pago e quem_pagou
+            conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE, quem_pagou = :quem WHERE id = :id'), {
+                "quem": quem_pagou.strip() if quem_pagou else None,
+                "id": id_reg
+            })
         elif acao == "excluir":
             conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
         conn.commit()
 
 # --- APP STREAMLIT ---
-st.set_page_config(page_title="Terminal Financeiro v3.6 - Supabase", layout="wide")
+st.set_page_config(
+    page_title="Terminal Financeiro Família",
+    layout="wide",
+    initial_sidebar_state="collapsed",  # Melhor para mobile
+    page_icon="💰"
+)
+
 init_db()
 
-st.title("💰 Gestão Financeira Absoluta")
+# Estilo simples para mobile (botões maiores, texto legível)
+st.markdown("""
+    <style>
+    .stButton > button {
+        width: 100%;
+        height: 3rem;
+        font-size: 1.2rem;
+    }
+    .stExpander {
+        font-size: 1.1rem;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 1rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-tab1, tab2 = st.tabs(["🚀 Lançamentos", "📊 Dashboard & Gestão"])
+st.title("💰 Gestão Financeira Família")
 
-with tab1:
-    if 'dados_temp' not in st.session_state:
-        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros'}
+tab_ocr, tab_manual, tab_dashboard = st.tabs(["Scanner OCR", "Lançamento Manual", "Dashboard & Gestão"])
 
-    col_scan, col_manual = st.columns([1, 1])
+with tab_ocr:
+    st.subheader("📷 Scanner de Boletos (Tesseract)")
+    uploaded_file = st.file_uploader("Envie o boleto (PDF ou imagem)", type=["png", "jpg", "jpeg", "pdf"])
 
-    with col_scan:
-        st.subheader("📷 Scanner de Boletos (Tesseract - leve)")
-        uploaded_file = st.file_uploader("Upload PDF ou Imagem", type=["png", "jpg", "jpeg", "pdf"])
+    if uploaded_file:
+        try:
+            if uploaded_file.type == "application/pdf":
+                images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
+                img = images[0]
+            else:
+                img = Image.open(uploaded_file)
+            st.image(img, use_column_width=True)
 
-        if uploaded_file:
-            try:
-                if uploaded_file.type == "application/pdf":
-                    # Converte só a primeira página para manter leve
-                    images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
-                    img = images[0]
-                else:
-                    img = Image.open(uploaded_file)
-                st.image(img, width=250)
+            if st.button("🔍 Escanear Boleto"):
+                with st.spinner("Lendo boleto..."):
+                    txt = pytesseract.image_to_string(img, lang='por', config='--psm 6')
+                    txt = txt.lower()
 
-                if st.button("🔍 Escanear Agora"):
-                    with st.spinner("Processando OCR com Tesseract (leve)..."):
-                        # Tesseract - lang='por' para português
-                        txt = pytesseract.image_to_string(img, lang='por', config='--psm 6')
-                        txt = txt.lower()
+                    desc, cat = "Outros", "Outros"
+                    if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                    elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
 
-                        desc, cat = "Outros", "Outros"
-                        if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
-                        elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
+                    vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
+                    nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+                    v_calc = nums[0] if nums else 0.0
 
-                        vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
-                        nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+                    datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                    hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
+                    venc = max(dts) if dts else hoje
 
-                        v_calc = nums[0] if nums else 0.0
+                    st.session_state['dados_temp'] = {
+                        'data': venc.strftime("%d/%m/%Y"),
+                        'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
+                        'desc': desc, 'cat': cat,
+                        'quem_pagou': ""  # Pode tentar detectar nome se quiser, mas por enquanto vazio
+                    }
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao ler boleto: {str(e)}. Tente uma imagem clara ou PDF de 1 página.")
 
-                        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                        hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                        dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
-                        venc = max(dts) if dts else hoje
+    # Preenche campos se veio do OCR
+    if 'dados_temp' in st.session_state:
+        st.info("Dados detectados do boleto. Ajuste se necessário e salve manualmente abaixo.")
 
-                        st.session_state['dados_temp'] = {
-                            'data': venc.strftime("%d/%m/%Y"),
-                            'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
-                            'desc': desc, 'cat': cat
-                        }
-                        st.rerun()
-            except Exception as e:
-                st.error(f"Erro ao processar arquivo: {str(e)}. Tente uma imagem clara ou PDF simples (1 página).")
+with tab_manual:
+    st.subheader("⌨️ Novo Lançamento")
+    if st.button("Limpar formulário"):
+        st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
+        st.rerun()
 
-    with col_manual:
-        st.subheader("⌨️ Entrada de Dados")
-        if st.button("➕ Novo Lançamento Manual"):
-            st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros'}
-            st.rerun()
+    with st.form("form_financeiro"):
+        f_desc = st.text_input("Descrição (ex: Condomínio, Energia)", value=st.session_state.get('dados_temp', {}).get('desc', ''))
+        lista_cats = ["Moradia", "Saúde", "Alimentação", "Contas", "Transporte", "Educação", "Investimento", "Outros"]
+        f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state.get('dados_temp', {}).get('cat', 'Outros')) if st.session_state.get('dados_temp', {}).get('cat') in lista_cats else 0)
 
-        with st.form("form_financeiro"):
-            f_desc = st.text_input("O que é? (Ex: Plano de Saúde)", value=st.session_state['dados_temp']['desc'])
-            lista_cats = ["Moradia", "Saúde", "Alimentação", "Contas", "Transporte", "Educação", "Investimento", "Outros"]
-            f_cat = st.selectbox("Categoria", lista_cats, index=lista_cats.index(st.session_state['dados_temp']['cat']) if st.session_state['dados_temp']['cat'] in lista_cats else 0)
+        c_d, c_v = st.columns(2)
+        f_data = c_d.text_input("Vencimento (dd/mm/aaaa)", value=st.session_state.get('dados_temp', {}).get('data', datetime.now().strftime("%d/%m/%Y")))
+        f_valor = c_v.text_input("Valor R$", value=st.session_state.get('dados_temp', {}).get('valor', '0,00'))
 
-            c_d, c_v = st.columns(2)
-            f_data = c_d.text_input("Vencimento", value=st.session_state['dados_temp']['data'])
-            f_valor = c_v.text_input("Valor R$", value=st.session_state['dados_temp']['valor'])
-            f_pago = st.checkbox("Já paguei este valor")
+        f_pago = st.checkbox("Já paguei")
+        f_quem_pagou = st.text_input("Quem pagou? (nome da pessoa)", value=st.session_state.get('dados_temp', {}).get('quem_pagou', ''))
 
-            if st.form_submit_button("✅ SALVAR NO SISTEMA"):
-                if not f_valor.strip():
-                    st.error("Preencha o valor antes de salvar!")
-                else:
-                    salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago)
-                    st.success("Registrado!")
-                    st.balloons()
+        if st.form_submit_button("✅ Salvar Lançamento"):
+            if not f_valor.strip():
+                st.error("Preencha o valor!")
+            else:
+                salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
+                st.success("Lançamento salvo!")
+                st.balloons()
+                # Limpa temp após salvar
+                st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros', 'quem_pagou': ''}
 
-with tab2:
+with tab_dashboard:
     try:
         df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
     except Exception as e:
@@ -154,32 +184,44 @@ with tab2:
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
 
-        pendente = df[df['pago'] == False]['valor'].sum()
-        st.info(f"💰 Você ainda tem **R$ {pendente:,.2f}** em contas pendentes.")
+        # Resumo geral
+        pendente_total = df[df['pago'] == False]['valor'].sum()
+        st.info(f"💰 Contas pendentes totais: **R$ {pendente_total:,.2f}**")
+
+        # Por pessoa
+        pagos_por_pessoa = df[df['pago'] == True].groupby('quem_pagou')['valor'].sum().reset_index()
+        if not pagos_por_pessoa.empty:
+            st.subheader("Pagamentos por pessoa")
+            st.dataframe(pagos_por_pessoa.style.format({"valor": "R$ {:,.2f}"}))
+            st.info(f"Total pago até agora: **R$ {pagos_por_pessoa['valor'].sum():,.2f}**")
 
         g1, g2 = st.columns(2)
         with g1:
-            st.write("📊 Gastos Mensais")
+            st.subheader("Gastos Mensais")
             df['mes'] = df['dt'].dt.strftime('%m/%Y')
             evol = df.groupby('mes')['valor'].sum().reset_index()
             st.bar_chart(evol.set_index('mes'))
 
         with g2:
-            st.write("🍕 Divisão por Setor")
+            st.subheader("Divisão por Categoria")
             setor = df.groupby('categoria')['valor'].sum().reset_index()
             fig = px.pie(setor, values='valor', names='categoria', hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe)
             st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
+        st.subheader("Lista de Lançamentos")
         for i, r in df.sort_values('dt', ascending=False).iterrows():
             status = "✅ PAGO" if r['pago'] else "⏳ PENDENTE"
-            with st.expander(f"{status} | {r['data']} | {r['descricao']} | R$ {r['valor']:.2f}"):
+            quem = f" | Pago por: {r['quem_pagou']}" if r['pago'] and r['quem_pagou'] else ""
+            with st.expander(f"{status}{quem} | {r['data']} | {r['descricao']} | R$ {r['valor']:.2f}"):
                 c1, c2 = st.columns(2)
                 if not r['pago'] and c1.button("Confirmar Pagamento", key=f"pay{r['id']}"):
-                    acoes_db(r['id'], "pagar")
-                    st.rerun()
-                if c2.button("Excluir Registro", key=f"del{r['id']}"):
+                    quem_pagou = st.text_input("Quem pagou?", key=f"quem{r['id']}")
+                    if st.button("Confirmar", key=f"conf{r['id']}"):
+                        acoes_db(r['id'], "pagar", quem_pagou)
+                        st.rerun()
+                if c2.button("Excluir", key=f"del{r['id']}"):
                     acoes_db(r['id'], "excluir")
                     st.rerun()
     else:
-        st.info("Nenhum dado encontrado.")
+        st.info("Nenhum lançamento ainda. Comece adicionando no manual ou scanner.")
