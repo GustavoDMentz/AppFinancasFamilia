@@ -1,7 +1,5 @@
-%%writefile app.py
 import streamlit as st
 import pandas as pd
-import sqlite3
 import easyocr
 import os
 import re
@@ -10,45 +8,62 @@ import plotly.express as px
 from PIL import Image
 from datetime import datetime
 from pdf2image import convert_from_bytes
+from sqlalchemy import create_engine, text
 
-# --- CONFIGURAÇÃO DB ---
-DB_NAME = "financeiro.db"
+# --- CONFIGURAÇÃO DB SUPABASE ---
+@st.cache_resource
+def get_engine():
+    # Lê do secrets.toml ou Streamlit Cloud secrets
+    return create_engine(st.secrets["connections"]["financeiro"]["url"])
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS lancamentos
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  data TEXT, valor REAL, descricao TEXT, categoria TEXT,
-                  data_registro TEXT, pago INTEGER DEFAULT 0)''')
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.connect() as conn:
+        # Cria tabela se não existir (já deve existir, mas segurança)
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS "Lançamentos" (
+                id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                data TEXT,
+                valor NUMERIC(12,2),
+                descricao TEXT,
+                categoria TEXT,
+                data_registro TIMESTAMPTZ DEFAULT NOW(),
+                pago BOOLEAN DEFAULT FALSE
+            )
+        """))
+        conn.commit()
 
 def salvar_no_db(data_doc, valor, desc, cat, pago):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
+    engine = get_engine()
     try:
         valor_limpo = float(valor.replace('.', '').replace(',', '.'))
     except:
         valor_limpo = 0.0
-    data_reg = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO lancamentos (data, valor, descricao, categoria, data_registro, pago) VALUES (?, ?, ?, ?, ?, ?)",
-              (data_doc, valor_limpo, desc, cat, data_reg, 1 if pago else 0))
-    conn.commit()
-    conn.close()
+    
+    with engine.connect() as conn:
+        conn.execute(text("""
+            INSERT INTO "Lançamentos" (data, valor, descricao, categoria, pago)
+            VALUES (:data, :valor, :descricao, :categoria, :pago)
+        """), {
+            "data": data_doc,
+            "valor": valor_limpo,
+            "descricao": desc,
+            "categoria": cat,
+            "pago": pago  # True/False
+        })
+        conn.commit()
 
 def acoes_db(id_reg, acao):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    if acao == "pagar":
-        c.execute("UPDATE lancamentos SET pago = 1 WHERE id = ?", (id_reg,))
-    elif acao == "excluir":
-        c.execute("DELETE FROM lancamentos WHERE id = ?", (id_reg,))
-    conn.commit()
-    conn.close()
+    engine = get_engine()
+    with engine.connect() as conn:
+        if acao == "pagar":
+            conn.execute(text('UPDATE "Lançamentos" SET pago = TRUE WHERE id = :id'), {"id": id_reg})
+        elif acao == "excluir":
+            conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
+        conn.commit()
 
 # --- APP STREAMLIT ---
-st.set_page_config(page_title="Terminal Financeiro v3.6", layout="wide")
+st.set_page_config(page_title="Terminal Financeiro v3.6 - Supabase", layout="wide")
 init_db()
 
 @st.cache_resource
@@ -62,7 +77,6 @@ st.title("💰 Gestão Financeira Absoluta")
 tab1, tab2 = st.tabs(["🚀 Lançamentos", "📊 Dashboard & Gestão"])
 
 with tab1:
-    # Estado inicial para manual ou scanner
     if 'dados_temp' not in st.session_state:
         st.session_state['dados_temp'] = {'data': datetime.now().strftime("%d/%m/%Y"), 'valor': '0,00', 'desc': '', 'cat': 'Outros'}
 
@@ -83,22 +97,15 @@ with tab1:
                 res = reader.readtext(np.array(img), detail=0)
                 txt = " ".join(res).lower()
 
-                # --- REGRAS SEPARADAS ---
-                desc, cat, tipo = "Outros", "Outros", "outro"
-                if any(x in txt for x in ['condominio', 'condomínio']): desc, cat, tipo = "Condomínio", "Moradia", "condo"
-                elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat, tipo = "Energia (CEEE)", "Moradia", "luz"
+                desc, cat = "Outros", "Outros"
+                if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia (CEEE)", "Moradia"
 
-                # Valores
                 vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
                 nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
 
-                v_calc = 0.0
-                if nums:
-                    if tipo == "luz": v_calc = nums[0] # REGRA LUZ: MAIOR
-                    elif tipo == "condo": v_calc = nums[1] if len(nums) > 1 else nums[0] # REGRA CONDO: PRINCIPAL
-                    else: v_calc = nums[0]
+                v_calc = nums[0] if nums else 0.0
 
-                # Datas (Futuro ou Hoje)
                 datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
                 hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                 dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
@@ -133,18 +140,14 @@ with tab1:
                 st.balloons()
 
 with tab2:
-    conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT * FROM lancamentos", conn)
-    conn.close()
+    df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
 
     if not df.empty:
-        df['dt'] = pd.to_datetime(df['data'], dayfirst=True)
+        df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
 
-        # Métrica de Resumo
-        pendente = df[df['pago'] == 0]['valor'].sum()
+        pendente = df[df['pago'] == False]['valor'].sum()
         st.info(f"💰 Você ainda tem **R$ {pendente:,.2f}** em contas pendentes.")
 
-        # --- DASHBOARD ---
         g1, g2 = st.columns(2)
         with g1:
             st.write("📊 Gastos Mensais")
@@ -159,14 +162,15 @@ with tab2:
             st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
-        # --- LISTA DE GESTÃO ---
         for i, r in df.sort_values('dt', ascending=False).iterrows():
             status = "✅ PAGO" if r['pago'] else "⏳ PENDENTE"
             with st.expander(f"{status} | {r['data']} | {r['descricao']} | R$ {r['valor']:.2f}"):
                 c1, c2 = st.columns(2)
                 if not r['pago'] and c1.button("Confirmar Pagamento", key=f"pay{r['id']}"):
-                    acoes_db(r['id'], "pagar"); st.rerun()
+                    acoes_db(r['id'], "pagar")
+                    st.rerun()
                 if c2.button("Excluir Registro", key=f"del{r['id']}"):
-                    acoes_db(r['id'], "excluir"); st.rerun()
+                    acoes_db(r['id'], "excluir")
+                    st.rerun()
     else:
         st.info("Nenhum dado encontrado.")
