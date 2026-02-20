@@ -270,27 +270,37 @@ with t_ocr:
         except Exception as e:
             st.error(f"Erro ao carregar imagem: {str(e)}")
 
-# --- TAB: PAINEL (O Dashboard) ---
+# --- TAB 1: DASHBOARD ---
 with t_dash:
-    df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
+    engine = get_engine()
+    df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', engine.connect())
 
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
-        total_pendente = df[df['pago'] == False]['valor'].sum()
-        total_pago = df[df['pago'] == True]['valor'].sum()
+        
+        # Seletor de Mês para o Dashboard (Filtro Global do Painel)
+        df['mes_referencia'] = df['dt'].dt.strftime('%m/%Y')
+        lista_meses = sorted(df['mes_referencia'].unique(), key=lambda x: datetime.strptime(x, "%m/%Y"), reverse=True)
+        mes_selecionado = st.selectbox("Visualizar Mês:", lista_meses, index=0)
+        
+        # Filtramos o DataFrame para os cálculos do mês atual
+        df_mes = df[df['mes_referencia'] == mes_selecionado]
+        
+        total_pendente = df_mes[df_mes['pago'] == False]['valor'].sum()
+        total_pago = df_mes[df_mes['pago'] == True]['valor'].sum()
         
         m1, m2 = st.columns(2)
-        m1.metric("Pendente", f"R$ {total_pendente:,.2f}")
-        m2.metric("Pago", f"R$ {total_pago:,.2f}")
+        m1.metric(f"Pendente ({mes_selecionado})", f"R$ {total_pendente:,.2f}")
+        m2.metric(f"Pago ({mes_selecionado})", f"R$ {total_pago:,.2f}")
 
         st.divider()
 
-        tab_g1, tab_g2, tab_g3 = st.tabs(["👤 Divisão", "📈 Mensal", "🍕 Categoria"])
+        tab_g1, tab_g2, tab_g3 = st.tabs(["👤 Divisão", "📈 Evolução", "🍕 Categoria"])
         mobile_config = {'staticPlot': True, 'displayModeBar': False}
 
         with tab_g1:
-            df['quem_pagou'] = df['quem_pagou'].fillna("").astype(str).str.strip()
-            df_pessoas = df[(df['pago'] == True) & (df['quem_pagou'] != "")]
+            df_mes['quem_pagou'] = df_mes['quem_pagou'].fillna("").astype(str).str.strip()
+            df_pessoas = df_mes[(df_mes['pago'] == True) & (df_mes['quem_pagou'] != "")]
             if not df_pessoas.empty:
                 soma_pessoas = df_pessoas.groupby('quem_pagou')['valor'].sum().reset_index().sort_values('valor', ascending=True)
                 fig_pessoas = px.bar(soma_pessoas, x='valor', y='quem_pagou', text='valor', color='quem_pagou', color_discrete_sequence=px.colors.qualitative.Set2, orientation='h')
@@ -298,9 +308,10 @@ with t_dash:
                 fig_pessoas.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), xaxis_title="", yaxis_title="", showlegend=False, xaxis=dict(showticklabels=False))
                 st.plotly_chart(fig_pessoas, use_container_width=True, config=mobile_config)
             else:
-                st.info("Nenhum pagamento registrado.")
+                st.info("Nenhum pagamento registrado neste mês.")
 
         with tab_g2:
+            # Mantemos a visão de todos os meses para ver a evolução
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
             evol_cat = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index().sort_values('mes_periodo')
@@ -314,15 +325,32 @@ with t_dash:
             st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
 
         with tab_g3:
-            setor = df.groupby('categoria')['valor'].sum().reset_index()
-            fig_pie = px.pie(setor, values='valor', names='categoria', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig_pie.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), showlegend=False)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True, config=mobile_config)
+            # CORREÇÃO AQUI: Usamos df_mes para que o gráfico de pizza reflita apenas as parcelas do mês
+            setor = df_mes.groupby('categoria')['valor'].sum().reset_index()
+            if not setor.empty:
+                fig_pie = px.pie(setor, values='valor', names='categoria', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_pie.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), showlegend=False)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True, config=mobile_config)
+            else:
+                st.info("Sem dados para este mês.")
 
         st.divider()
-        filtro_status = st.radio("Filtro:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
-        df_view = df.sort_values('dt', ascending=True)
+        # Filtro de lista baseado no mês selecionado no topo
+        df_view = df_mes.sort_values('dt', ascending=True)
+        filtro_status = st.radio("Filtro Status:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
+        if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
+        elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
+
+        for _, row in df_view.iterrows():
+            with st.container(border=True):
+                status_icon = "✅" if row['pago'] else "⏳"
+                tag_responsavel = f"| 👤 {row['quem_pagou']}" if row['quem_pagou'] != "" else ""
+                classe_cor = "valor-pago" if row['pago'] else "valor-pendente"
+                st.caption(f"{status_icon} {row['data']} | 🏷️ {row['categoria']} {tag_responsavel}")
+                st.markdown(f"**{row['descricao']}**")
+                st.markdown(f"<p class='valor-card {classe_cor}'>R$ {row['valor']:,.2f}</p>", unsafe_allow_html=True)
+                # ... (botões de pagar/excluir permanecem iguais)
         if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
         elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
 
