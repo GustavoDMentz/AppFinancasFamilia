@@ -191,16 +191,16 @@ with t_dash:
             else:
                 st.info("Nenhum pagamento registrado.")
 
-        with tab_g2:
+       with tab_g2:
             # 1. Criação das datas
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
             
-            # 2. Agrupamentos (Um para as fatias coloridas, outro para o TOTAL EXATO)
+            # 2. Agrupamentos
             evol_cat = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index().sort_values('mes_periodo')
             evol_total = df.groupby(['mes_periodo', 'mes_str'])['valor'].sum().reset_index().sort_values('mes_periodo')
 
-            # 3. Gráfico Empilhado (apenas visual, sem texto interno poluindo)
+            # 3. Gráfico Empilhado
             fig_bar = px.bar(
                 evol_cat, 
                 x='mes_str', 
@@ -209,29 +209,31 @@ with t_dash:
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             
-            # 4. MÁGICA SOTA: Coloca o TOTAL MENSAL EXATO flutuando em cima de cada barra
+            # 4. MÁGICA DE UX: Texto na Vertical e sem o "R$" (para economizar espaço)
             max_y = evol_total['valor'].max() if not evol_total.empty else 0
             
             for _, row in evol_total.iterrows():
-                # Formatação estrita PT-BR (Ex: 4.850,50)
+                # Formatação Pt-BR
                 valor_ptbr = f"{row['valor']:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
                 
                 fig_bar.add_annotation(
                     x=row['mes_str'],
                     y=row['valor'],
-                    text=f"<b>R$ {valor_ptbr}</b>",
+                    text=f"<b>{valor_ptbr}</b>", # Removi o "R$" para limpar a poluição visual
                     showarrow=False,
-                    yshift=15, # Empurra o texto um pouco para cima da barra
-                    font=dict(size=15) # Tamanho legível e em negrito no mobile
+                    yanchor="bottom",
+                    yshift=5,
+                    textangle=-90, # <--- DEIXA O TEXTO EM PÉ (Vertical)
+                    font=dict(size=12)
                 )
             
-            # 5. Layout Ultra-Mobile (Ajustes para o texto caber perfeitamente)
+            # 5. Layout Ultra-Mobile (Ajustes de espaçamento)
             fig_bar.update_layout(
                 barmode='stack',
                 dragmode=False, 
                 plot_bgcolor="rgba(0,0,0,0)", 
                 paper_bgcolor="rgba(0,0,0,0)", 
-                margin=dict(l=0, r=0, t=35, b=20), # Margem superior extra para o texto não cortar
+                margin=dict(l=0, r=0, t=65, b=20), # Aumentei o espaço no topo (t) para caber o texto em pé
                 xaxis_title="", 
                 yaxis_title="",
                 legend=dict(
@@ -242,12 +244,15 @@ with t_dash:
                     x=0.5,
                     title=""
                 ),
-                xaxis=dict(showgrid=False),
+                xaxis=dict(
+                    showgrid=False, 
+                    tickangle=-45 # <--- Inclina as datas embaixo para não colidirem tbm
+                ),
                 yaxis=dict(
                     showgrid=True, 
                     gridcolor='rgba(128,128,128,0.2)', 
-                    range=[0, max_y * 1.20], # Dá um "respiro" de 20% no teto para o texto caber
-                    showticklabels=False # Remove os números laterais do eixo Y (já temos o total na barra!)
+                    range=[0, max_y * 1.40], # Dá um respiro enorme de 40% no teto
+                    showticklabels=False 
                 ) 
             )
             
