@@ -313,6 +313,7 @@ with t_contas:
                 else:
                     salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
                     st.toast("Conta salva!", icon="🎉")
+                    st.rerun() # <--- MÁGICA AQUI: Atualiza o Dashboard na hora!
 
 # --- TAB 3: CARTÃO / PARCELAS ---
 with t_cartao:
@@ -333,7 +334,8 @@ with t_cartao:
                 else:
                     salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
                     st.toast("Compra parcelada salva!", icon="💳")
-
+                    st.rerun() # <--- MÁGICA AQUI: Atualiza o Dashboard na hora!
+                    
 # --- TAB 4: OCR (Fluxo Contínuo) ---
 with t_ocr:
     st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
