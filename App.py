@@ -159,10 +159,10 @@ if 'uploader_key' not in st.session_state:
 # ==========================================
 st.markdown("### 💸 Gestão Família")
 
-# Reordenado para que 'À Vista' seja a primeira aba (default)
-t_contas, t_dash, t_cartao, t_ocr = st.tabs(["🧾 À Vista", "📊 Painel", "💳 Cartão", "📷 Scan"])
+# Painel colocado por último "de castigo"
+t_contas, t_cartao, t_ocr, t_dash = st.tabs(["🧾 À Vista", "💳 Cartão", "📷 Scan", "📊 Painel"])
 
-# --- TAB: À VISTA (Antigo Fixo) ---
+# --- TAB: À VISTA ---
 with t_contas:
     with st.container(border=True):
         with st.form("form_contas", clear_on_submit=True):
@@ -183,7 +183,94 @@ with t_contas:
                     st.toast("Conta salva!", icon="🎉")
                     st.rerun()
 
-# --- TAB: DASHBOARD ---
+# --- TAB: CARTÃO / PARCELAS ---
+with t_cartao:
+    with st.container(border=True):
+        with st.form("form_cartao", clear_on_submit=True):
+            f_desc_c = st.text_input("Descrição da Compra", value="")
+            c1, c2 = st.columns(2)
+            f_data_c = c1.text_input("Data 1ª Parcela", value=datetime.now().strftime("%d/%m/%Y"))
+            f_valor_c = c2.text_input("Valor TOTAL R$", value="")
+            c3, c4 = st.columns(2)
+            f_parcelas_c = c3.number_input("Parcelas", min_value=2, max_value=36, value=2, step=1)
+            f_cat_c = c4.selectbox("Categoria ", ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"], index=6)
+            f_quem_pagou_c = st.text_input("Responsável pela compra?")
+            f_pago_c = st.checkbox("1ª parcela já paga")
+
+            if st.form_submit_button("✅ Salvar Compra", type="primary", use_container_width=True):
+                if not f_valor_c.strip(): st.error("Preencha o valor total!")
+                else:
+                    salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
+                    st.toast("Compra parcelada salva!", icon="💳")
+                    st.rerun()
+
+# --- TAB: OCR / SCAN ---
+with t_ocr:
+    st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
+    uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed", key=st.session_state['uploader_key'])
+    if uploaded_file:
+        try:
+            if uploaded_file.type == "application/pdf":
+                images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
+                img = images[0]
+            else:
+                img = Image.open(uploaded_file)
+            with st.expander("👁️ Ver documento carregado", expanded=not st.session_state['ocr_concluido']):
+                st.image(img, use_container_width=True)
+            if not st.session_state['ocr_concluido']:
+                if st.button("🔍 Analisar Documento", type="primary", use_container_width=True):
+                    with st.status("Lendo documento...", expanded=True) as status:
+                        txt = pytesseract.image_to_string(img, lang='por', config='--psm 6').lower()
+                        desc, cat = "Outros", "Outros"
+                        if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
+                        elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia", "Moradia"
+                        vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
+                        nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
+                        v_calc = nums[0] if nums else 0.0
+                        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
+                        hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                        dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
+                        venc = max(dts) if dts else hoje
+                        st.session_state['dados_temp'] = {'data': venc.strftime("%d/%m/%Y"), 'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','), 'desc': desc, 'cat': cat}
+                        st.session_state['ocr_concluido'] = True
+                        status.update(label="Documento lido com sucesso!", state="complete", expanded=False)
+                        st.rerun()
+            if st.session_state['ocr_concluido']:
+                st.success("✨ Dados extraídos! Revise e salve abaixo.")
+                with st.container(border=True):
+                    f_desc_o = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
+                    c1, c2 = st.columns(2)
+                    f_data_o = c1.text_input("Vencimento", value=st.session_state['dados_temp'].get('data', ''))
+                    f_valor_o = c2.text_input("Valor R$", value=st.session_state['dados_temp'].get('valor', ''))
+                    lista_cats_o = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
+                    cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
+                    f_cat_o = st.selectbox("Categoria", lista_cats_o, index=lista_cats_o.index(cat_atual) if cat_atual in lista_cats_o else 6)
+                    st.divider()
+                    f_parcelado_o = st.checkbox("🔄 Transformar em Compra Parcelada?")
+                    f_parcelas_o = 1
+                    if f_parcelado_o:
+                        f_parcelas_o = st.number_input("Qtd de Parcelas", min_value=2, max_value=36, value=2, step=1)
+                    f_quem_pagou_o = st.text_input("Responsável pelo pagamento?")
+                    f_pago_o = st.checkbox("Já paguei este valor")
+                    btn_c1, btn_c2 = st.columns(2)
+                    with btn_c1:
+                        if st.button("✅ Confirmar e Salvar", type="primary", use_container_width=True):
+                            if not f_valor_o.strip(): st.error("Verifique o valor!")
+                            else:
+                                salvar_no_db(f_data_o, f_valor_o, f_desc_o, f_cat_o, f_pago_o, f_quem_pagou_o, f_parcelas_o)
+                                st.toast("Documento salvo!", icon="🎉")
+                                st.session_state['ocr_concluido'] = False
+                                st.session_state['uploader_key'] = str(uuid.uuid4())
+                                st.rerun()
+                    with btn_c2:
+                        if st.button("❌ Cancelar", use_container_width=True):
+                            st.session_state['ocr_concluido'] = False
+                            st.session_state['uploader_key'] = str(uuid.uuid4())
+                            st.rerun()
+        except Exception as e:
+            st.error(f"Erro ao carregar imagem: {str(e)}")
+
+# --- TAB: PAINEL (O Dashboard) ---
 with t_dash:
     df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
 
@@ -260,90 +347,3 @@ with t_dash:
                         modal_exclusao(row['id'])
     else:
         st.info("Nenhum lançamento no banco. Use as abas ao lado para adicionar.", icon="ℹ️")
-
-# --- TAB: CARTÃO / PARCELAS ---
-with t_cartao:
-    with st.container(border=True):
-        with st.form("form_cartao", clear_on_submit=True):
-            f_desc_c = st.text_input("Descrição da Compra", value="")
-            c1, c2 = st.columns(2)
-            f_data_c = c1.text_input("Data 1ª Parcela", value=datetime.now().strftime("%d/%m/%Y"))
-            f_valor_c = c2.text_input("Valor TOTAL R$", value="")
-            c3, c4 = st.columns(2)
-            f_parcelas_c = c3.number_input("Parcelas", min_value=2, max_value=36, value=2, step=1)
-            f_cat_c = c4.selectbox("Categoria ", ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"], index=6)
-            f_quem_pagou_c = st.text_input("Responsável pela compra?")
-            f_pago_c = st.checkbox("1ª parcela já paga")
-
-            if st.form_submit_button("✅ Salvar Compra", type="primary", use_container_width=True):
-                if not f_valor_c.strip(): st.error("Preencha o valor total!")
-                else:
-                    salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
-                    st.toast("Compra parcelada salva!", icon="💳")
-                    st.rerun()
-                            
-# --- TAB: OCR (Fluxo Contínuo) ---
-with t_ocr:
-    st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
-    uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed", key=st.session_state['uploader_key'])
-    if uploaded_file:
-        try:
-            if uploaded_file.type == "application/pdf":
-                images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
-                img = images[0]
-            else:
-                img = Image.open(uploaded_file)
-            with st.expander("👁️ Ver documento carregado", expanded=not st.session_state['ocr_concluido']):
-                st.image(img, use_container_width=True)
-            if not st.session_state['ocr_concluido']:
-                if st.button("🔍 Analisar Documento", type="primary", use_container_width=True):
-                    with st.status("Lendo documento...", expanded=True) as status:
-                        txt = pytesseract.image_to_string(img, lang='por', config='--psm 6').lower()
-                        desc, cat = "Outros", "Outros"
-                        if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
-                        elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia", "Moradia"
-                        vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
-                        nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
-                        v_calc = nums[0] if nums else 0.0
-                        datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
-                        hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                        dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
-                        venc = max(dts) if dts else hoje
-                        st.session_state['dados_temp'] = {'data': venc.strftime("%d/%m/%Y"), 'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','), 'desc': desc, 'cat': cat}
-                        st.session_state['ocr_concluido'] = True
-                        status.update(label="Documento lido com sucesso!", state="complete", expanded=False)
-                        st.rerun()
-            if st.session_state['ocr_concluido']:
-                st.success("✨ Dados extraídos! Revise e salve abaixo.")
-                with st.container(border=True):
-                    f_desc_o = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
-                    c1, c2 = st.columns(2)
-                    f_data_o = c1.text_input("Vencimento", value=st.session_state['dados_temp'].get('data', ''))
-                    f_valor_o = c2.text_input("Valor R$", value=st.session_state['dados_temp'].get('valor', ''))
-                    lista_cats_o = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
-                    cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
-                    f_cat_o = st.selectbox("Categoria", lista_cats_o, index=lista_cats_o.index(cat_atual) if cat_atual in lista_cats_o else 6)
-                    st.divider()
-                    f_parcelado_o = st.checkbox("🔄 Transformar em Compra Parcelada?")
-                    f_parcelas_o = 1
-                    if f_parcelado_o:
-                        f_parcelas_o = st.number_input("Qtd de Parcelas", min_value=2, max_value=36, value=2, step=1)
-                    f_quem_pagou_o = st.text_input("Responsável pelo pagamento?")
-                    f_pago_o = st.checkbox("Já paguei este valor")
-                    btn_c1, btn_c2 = st.columns(2)
-                    with btn_c1:
-                        if st.button("✅ Confirmar e Salvar", type="primary", use_container_width=True):
-                            if not f_valor_o.strip(): st.error("Verifique o valor!")
-                            else:
-                                salvar_no_db(f_data_o, f_valor_o, f_desc_o, f_cat_o, f_pago_o, f_quem_pagou_o, f_parcelas_o)
-                                st.toast("Documento salvo!", icon="🎉")
-                                st.session_state['ocr_concluido'] = False
-                                st.session_state['uploader_key'] = str(uuid.uuid4())
-                                st.rerun()
-                    with btn_c2:
-                        if st.button("❌ Cancelar", use_container_width=True):
-                            st.session_state['ocr_concluido'] = False
-                            st.session_state['uploader_key'] = str(uuid.uuid4())
-                            st.rerun()
-        except Exception as e:
-            st.error(f"Erro ao carregar imagem: {str(e)}")
