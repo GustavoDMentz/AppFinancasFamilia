@@ -191,7 +191,7 @@ with t_dash:
             else:
                 st.info("Nenhum pagamento registrado.")
 
-       with tab_g2:
+        with tab_g2:
             # 1. Criação das datas
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
@@ -219,11 +219,11 @@ with t_dash:
                 fig_bar.add_annotation(
                     x=row['mes_str'],
                     y=row['valor'],
-                    text=f"<b>{valor_ptbr}</b>", # Removi o "R$" para limpar a poluição visual
+                    text=f"<b>{valor_ptbr}</b>", 
                     showarrow=False,
                     yanchor="bottom",
                     yshift=5,
-                    textangle=-90, # <--- DEIXA O TEXTO EM PÉ (Vertical)
+                    textangle=-90, 
                     font=dict(size=12)
                 )
             
@@ -233,7 +233,7 @@ with t_dash:
                 dragmode=False, 
                 plot_bgcolor="rgba(0,0,0,0)", 
                 paper_bgcolor="rgba(0,0,0,0)", 
-                margin=dict(l=0, r=0, t=65, b=20), # Aumentei o espaço no topo (t) para caber o texto em pé
+                margin=dict(l=0, r=0, t=65, b=20), 
                 xaxis_title="", 
                 yaxis_title="",
                 legend=dict(
@@ -246,18 +246,17 @@ with t_dash:
                 ),
                 xaxis=dict(
                     showgrid=False, 
-                    tickangle=-45 # <--- Inclina as datas embaixo para não colidirem tbm
+                    tickangle=-45 
                 ),
                 yaxis=dict(
                     showgrid=True, 
                     gridcolor='rgba(128,128,128,0.2)', 
-                    range=[0, max_y * 1.40], # Dá um respiro enorme de 40% no teto
+                    range=[0, max_y * 1.40], 
                     showticklabels=False 
                 ) 
             )
             
             st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
-        
 
         with tab_g3:
             setor = df.groupby('categoria')['valor'].sum().reset_index()
@@ -268,7 +267,6 @@ with t_dash:
 
         st.divider()
         
-        f_col1, f_col2, f_col3 = st.columns(3)
         filtro_status = st.radio("Filtro:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
         
         df_view = df.sort_values('dt', ascending=True)
@@ -318,7 +316,7 @@ with t_contas:
                 else:
                     salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
                     st.toast("Conta salva!", icon="🎉")
-                    st.rerun() # <--- MÁGICA AQUI: Atualiza o Dashboard na hora!
+                    st.rerun()
 
 # --- TAB 3: CARTÃO / PARCELAS ---
 with t_cartao:
@@ -339,13 +337,12 @@ with t_cartao:
                 else:
                     salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
                     st.toast("Compra parcelada salva!", icon="💳")
-                    st.rerun() # <--- MÁGICA AQUI: Atualiza o Dashboard na hora!
-                    
+                    st.rerun()
+                            
 # --- TAB 4: OCR (Fluxo Contínuo) ---
 with t_ocr:
     st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
     
-    # Campo de Upload com key dinâmica (permite limpar após salvar)
     uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed", key=st.session_state['uploader_key'])
 
     if uploaded_file:
@@ -356,11 +353,9 @@ with t_ocr:
             else:
                 img = Image.open(uploaded_file)
             
-            # Pré-visualização da Imagem
             with st.expander("👁️ Ver documento carregado", expanded=not st.session_state['ocr_concluido']):
-                st.image(img, use_column_width=True)
+                st.image(img, use_container_width=True)
 
-            # Botão de Extração (some após concluir)
             if not st.session_state['ocr_concluido']:
                 if st.button("🔍 Analisar Documento", type="primary", use_container_width=True):
                     with st.status("Lendo documento...", expanded=True) as status:
@@ -389,7 +384,6 @@ with t_ocr:
                         status.update(label="Documento lido com sucesso!", state="complete", expanded=False)
                         st.rerun()
 
-            # Formulário de Revisão Integrado (aparece APÓS a leitura)
             if st.session_state['ocr_concluido']:
                 st.success("✨ Dados extraídos! Revise e salve abaixo.")
                 
@@ -406,7 +400,6 @@ with t_ocr:
                     
                     st.divider()
                     
-                    # Permite escolher entre à vista ou parcelado direto no OCR
                     f_parcelado_o = st.checkbox("🔄 Transformar em Compra Parcelada?")
                     f_parcelas_o = 1
                     if f_parcelado_o:
@@ -422,13 +415,11 @@ with t_ocr:
                             else:
                                 salvar_no_db(f_data_o, f_valor_o, f_desc_o, f_cat_o, f_pago_o, f_quem_pagou_o, f_parcelas_o)
                                 st.toast("Documento salvo!", icon="🎉")
-                                # Reseta o OCR e limpa a foto
                                 st.session_state['ocr_concluido'] = False
                                 st.session_state['uploader_key'] = str(uuid.uuid4())
                                 st.rerun()
                     with btn_c2:
                         if st.button("❌ Cancelar", use_container_width=True):
-                            # Descarta tudo e limpa a foto
                             st.session_state['ocr_concluido'] = False
                             st.session_state['uploader_key'] = str(uuid.uuid4())
                             st.rerun()
