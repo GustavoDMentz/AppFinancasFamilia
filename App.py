@@ -192,10 +192,52 @@ with t_dash:
                 st.info("Nenhum pagamento registrado.")
 
         with tab_g2:
-            df['mes'] = df['dt'].dt.strftime('%m/%Y')
-            evol = df.groupby('mes')['valor'].sum().reset_index()
-            fig_bar = px.bar(evol, x='mes', y='valor', text_auto='.2s', color_discrete_sequence=['#4F8BF9'])
-            fig_bar.update_layout(dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=20, b=0), xaxis_title="", yaxis_title="")
+            # 1. Cria ordenação cronológica real (evita que 01/2026 venha antes de 12/2025)
+            df['mes_periodo'] = df['dt'].dt.to_period('M')
+            df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
+            
+            # 2. Agrupa por Mês E Categoria para criar os "blocos" coloridos
+            evol = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index()
+            evol = evol.sort_values('mes_periodo')
+
+            # 3. Gráfico Empilhado (Stacked Bar)
+            fig_bar = px.bar(
+                evol, 
+                x='mes_str', 
+                y='valor', 
+                color='categoria', # Aqui acontece a mágica visual
+                text='valor',
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            
+            # 4. Formata o texto para R$ 1.500,00 e esconde textos muito pequenos para não poluir
+            fig_bar.update_traces(
+                texttemplate='R$ %{text:,.2f}', 
+                textposition='inside',
+                insidetextfont=dict(color='white')
+            )
+            
+            # 5. Layout Ultra-Mobile (Legenda em baixo, grades suaves, drag desativado)
+            fig_bar.update_layout(
+                barmode='stack',
+                dragmode=False, 
+                plot_bgcolor="rgba(0,0,0,0)", 
+                paper_bgcolor="rgba(0,0,0,0)", 
+                margin=dict(l=0, r=0, t=20, b=20), 
+                xaxis_title="", 
+                yaxis_title="",
+                legend=dict(
+                    orientation="h", # Legenda horizontal...
+                    yanchor="bottom",
+                    y=-0.5, # ...abaixo do gráfico para não espremer no celular
+                    xanchor="center",
+                    x=0.5,
+                    title=""
+                ),
+                xaxis=dict(showgrid=False),
+                yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)') # Linhas guias horizontais fracas
+            )
+            
             st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
 
         with tab_g3:
