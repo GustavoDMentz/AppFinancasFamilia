@@ -159,7 +159,6 @@ if 'uploader_key' not in st.session_state:
 # ==========================================
 st.markdown("### 💸 Gestão Família")
 
-# Painel colocado por último "de castigo"
 t_contas, t_cartao, t_ocr, t_dash = st.tabs(["🧾 À Vista", "💳 Cartão", "📷 Scan", "📊 Painel"])
 
 # --- TAB: À VISTA ---
@@ -270,22 +269,22 @@ with t_ocr:
         except Exception as e:
             st.error(f"Erro ao carregar imagem: {str(e)}")
 
-# --- TAB 1: DASHBOARD ---
+# --- TAB: DASHBOARD ---
 with t_dash:
     engine = get_engine()
     df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', engine.connect())
 
     if not df.empty:
         df['dt'] = pd.to_datetime(df['data'], dayfirst=True, errors='coerce')
-        
-        # Seletor de Mês para o Dashboard (Filtro Global do Painel)
         df['mes_referencia'] = df['dt'].dt.strftime('%m/%Y')
         lista_meses = sorted(df['mes_referencia'].unique(), key=lambda x: datetime.strptime(x, "%m/%Y"), reverse=True)
-        mes_selecionado = st.selectbox("Visualizar Mês:", lista_meses, index=0)
         
-        # Filtramos o DataFrame para os cálculos do mês atual
+        # MÁGICA: Seleciona o mês atual do sistema por padrão
+        mes_hoje = datetime.now().strftime('%m/%Y')
+        idx_default = lista_meses.index(mes_hoje) if mes_hoje in lista_meses else 0
+        mes_selecionado = st.selectbox("Visualizar Mês:", lista_meses, index=idx_default)
+        
         df_mes = df[df['mes_referencia'] == mes_selecionado]
-        
         total_pendente = df_mes[df_mes['pago'] == False]['valor'].sum()
         total_pago = df_mes[df_mes['pago'] == True]['valor'].sum()
         
@@ -311,7 +310,6 @@ with t_dash:
                 st.info("Nenhum pagamento registrado neste mês.")
 
         with tab_g2:
-            # Mantemos a visão de todos os meses para ver a evolução
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
             evol_cat = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index().sort_values('mes_periodo')
@@ -325,7 +323,6 @@ with t_dash:
             st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
 
         with tab_g3:
-            # CORREÇÃO AQUI: Usamos df_mes para que o gráfico de pizza reflita apenas as parcelas do mês
             setor = df_mes.groupby('categoria')['valor'].sum().reset_index()
             if not setor.empty:
                 fig_pie = px.pie(setor, values='valor', names='categoria', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
@@ -336,9 +333,9 @@ with t_dash:
                 st.info("Sem dados para este mês.")
 
         st.divider()
-        # Filtro de lista baseado no mês selecionado no topo
         df_view = df_mes.sort_values('dt', ascending=True)
-        filtro_status = st.radio("Filtro Status:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
+        filtro_status = st.radio("Filtro Status:", ["Pendentes", "Pagos", "Todos"], horizontal=True, key="filtro_final", label_visibility="collapsed")
+        
         if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
         elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
 
@@ -350,20 +347,10 @@ with t_dash:
                 st.caption(f"{status_icon} {row['data']} | 🏷️ {row['categoria']} {tag_responsavel}")
                 st.markdown(f"**{row['descricao']}**")
                 st.markdown(f"<p class='valor-card {classe_cor}'>R$ {row['valor']:,.2f}</p>", unsafe_allow_html=True)
-                # ... (botões de pagar/excluir permanecem iguais)
-        if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
-        elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
-
-        for _, row in df_view.iterrows():
-            with st.container(border=True):
-                status_icon = "✅" if row['pago'] else "⏳"
-                tag_responsavel = f"| 👤 {row['quem_pagou']}" if row['quem_pagou'] != "" else ""
-                classe_cor = "valor-pago" if row['pago'] else "valor-pendente"
-                st.caption(f"{status_icon} {row['data']} | 🏷️ {row['categoria']} {tag_responsavel}")
-                st.markdown(f"**{row['descricao']}**")
-                st.markdown(f"<p class='valor-card {classe_cor}'>R$ {row['valor']:,.2f}</p>", unsafe_allow_html=True)
+                
+                # CORREÇÃO: Botão de exclusão agora aparece SEMPRE (seja pago ou pendente)
+                btn_c1, btn_c2 = st.columns(2)
                 if not row['pago']:
-                    btn_c1, btn_c2 = st.columns(2)
                     with btn_c1:
                         if st.button("✅ Pagar", key=f"pay_{row['id']}", use_container_width=True):
                             modal_pagamento(row['id'], row['descricao'])
@@ -371,6 +358,7 @@ with t_dash:
                         if st.button("🗑️ Excluir", key=f"del_{row['id']}", use_container_width=True):
                             modal_exclusao(row['id'])
                 else:
+                    # Se já estiver pago, ocupa apenas uma coluna com o botão de excluir
                     if st.button("🗑️ Excluir", key=f"del_{row['id']}", use_container_width=True):
                         modal_exclusao(row['id'])
     else:
