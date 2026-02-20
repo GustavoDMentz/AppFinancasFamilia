@@ -192,53 +192,67 @@ with t_dash:
                 st.info("Nenhum pagamento registrado.")
 
         with tab_g2:
-            # 1. Cria ordenação cronológica real (evita que 01/2026 venha antes de 12/2025)
+            # 1. Criação das datas
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
             
-            # 2. Agrupa por Mês E Categoria para criar os "blocos" coloridos
-            evol = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index()
-            evol = evol.sort_values('mes_periodo')
+            # 2. Agrupamentos (Um para as fatias coloridas, outro para o TOTAL EXATO)
+            evol_cat = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index().sort_values('mes_periodo')
+            evol_total = df.groupby(['mes_periodo', 'mes_str'])['valor'].sum().reset_index().sort_values('mes_periodo')
 
-            # 3. Gráfico Empilhado (Stacked Bar)
+            # 3. Gráfico Empilhado (apenas visual, sem texto interno poluindo)
             fig_bar = px.bar(
-                evol, 
+                evol_cat, 
                 x='mes_str', 
                 y='valor', 
-                color='categoria', # Aqui acontece a mágica visual
-                text='valor',
+                color='categoria', 
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             
-            # 4. Formata o texto para R$ 1.500,00 e esconde textos muito pequenos para não poluir
-            fig_bar.update_traces(
-                texttemplate='R$ %{text:,.2f}', 
-                textposition='inside',
-                insidetextfont=dict(color='white')
-            )
+            # 4. MÁGICA SOTA: Coloca o TOTAL MENSAL EXATO flutuando em cima de cada barra
+            max_y = evol_total['valor'].max() if not evol_total.empty else 0
             
-            # 5. Layout Ultra-Mobile (Legenda em baixo, grades suaves, drag desativado)
+            for _, row in evol_total.iterrows():
+                # Formatação estrita PT-BR (Ex: 4.850,50)
+                valor_ptbr = f"{row['valor']:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+                
+                fig_bar.add_annotation(
+                    x=row['mes_str'],
+                    y=row['valor'],
+                    text=f"<b>R$ {valor_ptbr}</b>",
+                    showarrow=False,
+                    yshift=15, # Empurra o texto um pouco para cima da barra
+                    font=dict(size=15) # Tamanho legível e em negrito no mobile
+                )
+            
+            # 5. Layout Ultra-Mobile (Ajustes para o texto caber perfeitamente)
             fig_bar.update_layout(
                 barmode='stack',
                 dragmode=False, 
                 plot_bgcolor="rgba(0,0,0,0)", 
                 paper_bgcolor="rgba(0,0,0,0)", 
-                margin=dict(l=0, r=0, t=20, b=20), 
+                margin=dict(l=0, r=0, t=35, b=20), # Margem superior extra para o texto não cortar
                 xaxis_title="", 
                 yaxis_title="",
                 legend=dict(
-                    orientation="h", # Legenda horizontal...
+                    orientation="h", 
                     yanchor="bottom",
-                    y=-0.5, # ...abaixo do gráfico para não espremer no celular
+                    y=-0.5, 
                     xanchor="center",
                     x=0.5,
                     title=""
                 ),
                 xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)') # Linhas guias horizontais fracas
+                yaxis=dict(
+                    showgrid=True, 
+                    gridcolor='rgba(128,128,128,0.2)', 
+                    range=[0, max_y * 1.20], # Dá um "respiro" de 20% no teto para o texto caber
+                    showticklabels=False # Remove os números laterais do eixo Y (já temos o total na barra!)
+                ) 
             )
             
             st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
+        
 
         with tab_g3:
             setor = df.groupby('categoria')['valor'].sum().reset_index()
