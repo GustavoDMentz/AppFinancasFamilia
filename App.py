@@ -159,9 +159,31 @@ if 'uploader_key' not in st.session_state:
 # ==========================================
 st.markdown("### 💸 Gestão Família")
 
-t_dash, t_contas, t_cartao, t_ocr = st.tabs(["📊 Painel", "🧾 Fixo", "💳 Cartão", "📷 Scan"])
+# Reordenado para que 'À Vista' seja a primeira aba (default)
+t_contas, t_dash, t_cartao, t_ocr = st.tabs(["🧾 À Vista", "📊 Painel", "💳 Cartão", "📷 Scan"])
 
-# --- TAB 1: DASHBOARD ---
+# --- TAB: À VISTA (Antigo Fixo) ---
+with t_contas:
+    with st.container(border=True):
+        with st.form("form_contas", clear_on_submit=True):
+            f_desc = st.text_input("Descrição", value="")
+            c1, c2 = st.columns(2)
+            lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
+            f_cat = c1.selectbox("Categoria", lista_cats, index=6)
+            f_data = c2.text_input("Vencimento (dd/mm/aaaa)", value=datetime.now().strftime("%d/%m/%Y"))
+            c3, c4 = st.columns(2)
+            f_valor = c3.text_input("Valor R$", value="")
+            f_quem_pagou = c4.text_input("Responsável?")
+            f_pago = st.checkbox("Já paguei")
+
+            if st.form_submit_button("✅ Salvar Conta", type="primary", use_container_width=True):
+                if not f_valor.strip(): st.error("Preencha o valor!")
+                else:
+                    salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
+                    st.toast("Conta salva!", icon="🎉")
+                    st.rerun()
+
+# --- TAB: DASHBOARD ---
 with t_dash:
     df = pd.read_sql('SELECT * FROM "Lançamentos" ORDER BY data_registro DESC', get_engine().connect())
 
@@ -192,70 +214,16 @@ with t_dash:
                 st.info("Nenhum pagamento registrado.")
 
         with tab_g2:
-            # 1. Criação das datas
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
-            
-            # 2. Agrupamentos
             evol_cat = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index().sort_values('mes_periodo')
             evol_total = df.groupby(['mes_periodo', 'mes_str'])['valor'].sum().reset_index().sort_values('mes_periodo')
-
-            # 3. Gráfico Empilhado
-            fig_bar = px.bar(
-                evol_cat, 
-                x='mes_str', 
-                y='valor', 
-                color='categoria', 
-                color_discrete_sequence=px.colors.qualitative.Pastel
-            )
-            
-            # 4. MÁGICA DE UX: Texto na Vertical e sem o "R$" (para economizar espaço)
+            fig_bar = px.bar(evol_cat, x='mes_str', y='valor', color='categoria', color_discrete_sequence=px.colors.qualitative.Pastel)
             max_y = evol_total['valor'].max() if not evol_total.empty else 0
-            
             for _, row in evol_total.iterrows():
-                # Formatação Pt-BR
                 valor_ptbr = f"{row['valor']:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-                
-                fig_bar.add_annotation(
-                    x=row['mes_str'],
-                    y=row['valor'],
-                    text=f"<b>{valor_ptbr}</b>", 
-                    showarrow=False,
-                    yanchor="bottom",
-                    yshift=5,
-                    textangle=-90, 
-                    font=dict(size=12)
-                )
-            
-            # 5. Layout Ultra-Mobile (Ajustes de espaçamento)
-            fig_bar.update_layout(
-                barmode='stack',
-                dragmode=False, 
-                plot_bgcolor="rgba(0,0,0,0)", 
-                paper_bgcolor="rgba(0,0,0,0)", 
-                margin=dict(l=0, r=0, t=65, b=20), 
-                xaxis_title="", 
-                yaxis_title="",
-                legend=dict(
-                    orientation="h", 
-                    yanchor="bottom",
-                    y=-0.5, 
-                    xanchor="center",
-                    x=0.5,
-                    title=""
-                ),
-                xaxis=dict(
-                    showgrid=False, 
-                    tickangle=-45 
-                ),
-                yaxis=dict(
-                    showgrid=True, 
-                    gridcolor='rgba(128,128,128,0.2)', 
-                    range=[0, max_y * 1.40], 
-                    showticklabels=False 
-                ) 
-            )
-            
+                fig_bar.add_annotation(x=row['mes_str'], y=row['valor'], text=f"<b>{valor_ptbr}</b>", showarrow=False, yanchor="bottom", yshift=5, textangle=-90, font=dict(size=12))
+            fig_bar.update_layout(barmode='stack', dragmode=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=65, b=20), xaxis_title="", yaxis_title="", legend=dict(orientation="h", yanchor="bottom", y=-0.5, xanchor="center", x=0.5, title=""), xaxis=dict(showgrid=False, tickangle=-45), yaxis=dict(showgrid=True, gridcolor='rgba(128,128,128,0.2)', range=[0, max_y * 1.40], showticklabels=False))
             st.plotly_chart(fig_bar, use_container_width=True, config=mobile_config)
 
         with tab_g3:
@@ -266,9 +234,7 @@ with t_dash:
             st.plotly_chart(fig_pie, use_container_width=True, config=mobile_config)
 
         st.divider()
-        
         filtro_status = st.radio("Filtro:", ["Pendentes", "Pagos", "Todos"], horizontal=True, label_visibility="collapsed")
-        
         df_view = df.sort_values('dt', ascending=True)
         if filtro_status == "Pendentes": df_view = df_view[df_view['pago'] == False]
         elif filtro_status == "Pagos": df_view = df_view[df_view['pago'] == True]
@@ -278,11 +244,9 @@ with t_dash:
                 status_icon = "✅" if row['pago'] else "⏳"
                 tag_responsavel = f"| 👤 {row['quem_pagou']}" if row['quem_pagou'] != "" else ""
                 classe_cor = "valor-pago" if row['pago'] else "valor-pendente"
-                
                 st.caption(f"{status_icon} {row['data']} | 🏷️ {row['categoria']} {tag_responsavel}")
                 st.markdown(f"**{row['descricao']}**")
                 st.markdown(f"<p class='valor-card {classe_cor}'>R$ {row['valor']:,.2f}</p>", unsafe_allow_html=True)
-                
                 if not row['pago']:
                     btn_c1, btn_c2 = st.columns(2)
                     with btn_c1:
@@ -297,28 +261,7 @@ with t_dash:
     else:
         st.info("Nenhum lançamento no banco. Use as abas ao lado para adicionar.", icon="ℹ️")
 
-# --- TAB 2: CONTAS À VISTA ---
-with t_contas:
-    with st.container(border=True):
-        with st.form("form_contas", clear_on_submit=True):
-            f_desc = st.text_input("Descrição", value="")
-            c1, c2 = st.columns(2)
-            lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
-            f_cat = c1.selectbox("Categoria", lista_cats, index=6)
-            f_data = c2.text_input("Vencimento (dd/mm/aaaa)", value=datetime.now().strftime("%d/%m/%Y"))
-            c3, c4 = st.columns(2)
-            f_valor = c3.text_input("Valor R$", value="")
-            f_quem_pagou = c4.text_input("Responsável?")
-            f_pago = st.checkbox("Já paguei")
-
-            if st.form_submit_button("✅ Salvar Conta", type="primary", use_container_width=True):
-                if not f_valor.strip(): st.error("Preencha o valor!")
-                else:
-                    salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
-                    st.toast("Conta salva!", icon="🎉")
-                    st.rerun()
-
-# --- TAB 3: CARTÃO / PARCELAS ---
+# --- TAB: CARTÃO / PARCELAS ---
 with t_cartao:
     with st.container(border=True):
         with st.form("form_cartao", clear_on_submit=True):
@@ -339,12 +282,10 @@ with t_cartao:
                     st.toast("Compra parcelada salva!", icon="💳")
                     st.rerun()
                             
-# --- TAB 4: OCR (Fluxo Contínuo) ---
+# --- TAB: OCR (Fluxo Contínuo) ---
 with t_ocr:
     st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
-    
     uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed", key=st.session_state['uploader_key'])
-
     if uploaded_file:
         try:
             if uploaded_file.type == "application/pdf":
@@ -352,62 +293,43 @@ with t_ocr:
                 img = images[0]
             else:
                 img = Image.open(uploaded_file)
-            
             with st.expander("👁️ Ver documento carregado", expanded=not st.session_state['ocr_concluido']):
                 st.image(img, use_container_width=True)
-
             if not st.session_state['ocr_concluido']:
                 if st.button("🔍 Analisar Documento", type="primary", use_container_width=True):
                     with st.status("Lendo documento...", expanded=True) as status:
                         txt = pytesseract.image_to_string(img, lang='por', config='--psm 6').lower()
-                        
                         desc, cat = "Outros", "Outros"
                         if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
                         elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia", "Moradia"
-
                         vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
                         nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
                         v_calc = nums[0] if nums else 0.0
-
                         datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
                         hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                         dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
                         venc = max(dts) if dts else hoje
-
-                        st.session_state['dados_temp'] = {
-                            'data': venc.strftime("%d/%m/%Y"),
-                            'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','),
-                            'desc': desc, 'cat': cat
-                        }
-                        
+                        st.session_state['dados_temp'] = {'data': venc.strftime("%d/%m/%Y"), 'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','), 'desc': desc, 'cat': cat}
                         st.session_state['ocr_concluido'] = True
                         status.update(label="Documento lido com sucesso!", state="complete", expanded=False)
                         st.rerun()
-
             if st.session_state['ocr_concluido']:
                 st.success("✨ Dados extraídos! Revise e salve abaixo.")
-                
                 with st.container(border=True):
                     f_desc_o = st.text_input("Descrição", value=st.session_state['dados_temp'].get('desc', ''))
-                    
                     c1, c2 = st.columns(2)
                     f_data_o = c1.text_input("Vencimento", value=st.session_state['dados_temp'].get('data', ''))
                     f_valor_o = c2.text_input("Valor R$", value=st.session_state['dados_temp'].get('valor', ''))
-                    
                     lista_cats_o = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
                     cat_atual = st.session_state['dados_temp'].get('cat', 'Outros')
                     f_cat_o = st.selectbox("Categoria", lista_cats_o, index=lista_cats_o.index(cat_atual) if cat_atual in lista_cats_o else 6)
-                    
                     st.divider()
-                    
                     f_parcelado_o = st.checkbox("🔄 Transformar em Compra Parcelada?")
                     f_parcelas_o = 1
                     if f_parcelado_o:
                         f_parcelas_o = st.number_input("Qtd de Parcelas", min_value=2, max_value=36, value=2, step=1)
-                        
                     f_quem_pagou_o = st.text_input("Responsável pelo pagamento?")
                     f_pago_o = st.checkbox("Já paguei este valor")
-
                     btn_c1, btn_c2 = st.columns(2)
                     with btn_c1:
                         if st.button("✅ Confirmar e Salvar", type="primary", use_container_width=True):
@@ -423,6 +345,5 @@ with t_ocr:
                             st.session_state['ocr_concluido'] = False
                             st.session_state['uploader_key'] = str(uuid.uuid4())
                             st.rerun()
-
         except Exception as e:
             st.error(f"Erro ao carregar imagem: {str(e)}")
