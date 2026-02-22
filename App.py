@@ -237,6 +237,9 @@ with t_contas:
 # --- TAB: CARTÃO / PARCELAS ---
 with t_cartao:
     with st.container(border=True):
+        # O Interruptor Mestre do Cartão
+        dividir_c = st.checkbox("🔄 Dividir esta compra?", key="div_cartao")
+        
         with st.form("form_cartao", clear_on_submit=True):
             f_desc_c = st.text_input("Descrição da Compra", value="")
             c1, c2 = st.columns(2)
@@ -247,7 +250,6 @@ with t_cartao:
             f_cat_c = c4.selectbox("Categoria ", ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"], index=6)
             
             st.divider()
-            dividir_c = st.checkbox("🔄 Dividir esta compra?")
             
             if dividir_c:
                 cd1_c, cd2_c = st.columns(2)
