@@ -192,6 +192,9 @@ t_contas, t_cartao, t_ocr, t_dash = st.tabs(["🧾 À Vista", "💳 Cartão", "�
 # --- TAB: À VISTA ---
 with t_contas:
     with st.container(border=True):
+        # O Interruptor fica FORA do formulário para atualizar a tela na hora
+        dividir = st.checkbox("🔄 Dividir esta despesa?", key="div_vista")
+        
         with st.form("form_contas", clear_on_submit=True):
             f_desc = st.text_input("Descrição", value="")
             c1, c2 = st.columns(2)
@@ -201,7 +204,6 @@ with t_contas:
             f_valor = st.text_input("Valor TOTAL R$", value="")
             
             st.divider()
-            dividir = st.checkbox("🔄 Dividir esta despesa?")
             
             if dividir:
                 cd1, cd2 = st.columns(2)
@@ -211,9 +213,9 @@ with t_contas:
                 p2_nome = cd2.text_input("Pessoa 2")
                 p2_pct = 100 - p1_pct
                 cd2.markdown(f"<div style='margin-top:2rem;'>% Pessoa 2: <b>{p2_pct}%</b></div>", unsafe_allow_html=True)
-                f_quem_pagou = "" # Anulado pois a divisão define nomes
+                f_quem_pagou = ""
             else:
-                f_quem_pagou = st.text_input("Responsável (Deixe em branco se ninguém pagou ainda)")
+                f_quem_pagou = st.text_input("Responsável (Deixe vazio se ninguém pagou ainda)")
             
             f_pago = st.checkbox("Já foi pago")
 
