@@ -34,6 +34,7 @@ st.markdown("""
     .valor-pendente { color: #FF7F0E; }
     .valor-pago { color: #2CA02C; }
     .block-container { padding-bottom: 5rem; padding-top: 2rem; }
+    .btn-icon { display: flex; justify-content: center; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -95,7 +96,7 @@ def salvar_no_db(data_doc, valor, desc, cat, pago, quem_pagou="", parcelas=1):
             })
         conn.commit()
 
-def acoes_db(id_reg, acao, quem_pagou=None):  # CORREÇÃO 1: aceita quem_pagou
+def acoes_db(id_reg, acao, quem_pagou=None, nova_desc=None):
     engine = get_engine()
     with engine.connect() as conn:
         if acao == "pagar":
@@ -113,13 +114,15 @@ def acoes_db(id_reg, acao, quem_pagou=None):  # CORREÇÃO 1: aceita quem_pagou
             if anteriores_pendentes > 0:
                 return False, "Você deve pagar primeiro a(s) parcela(s) anterior(es) desta compra!"
 
-            # CORREÇÃO 2: grava quem_pagou junto com pago = TRUE
             conn.execute(text("""
                 UPDATE "Lançamentos"
                 SET pago = TRUE, quem_pagou = COALESCE(:quem, quem_pagou)
                 WHERE id = :id
             """), {"id": id_reg, "quem": quem_pagou.strip() if quem_pagou else None})
         
+        elif acao == "editar":
+            conn.execute(text('UPDATE "Lançamentos" SET descricao = :nova_desc WHERE id = :id'), {"id": id_reg, "nova_desc": nova_desc})
+            
         elif acao == "excluir":
             conn.execute(text('DELETE FROM "Lançamentos" WHERE id = :id'), {"id": id_reg})
         conn.commit()
@@ -131,15 +134,25 @@ def acoes_db(id_reg, acao, quem_pagou=None):  # CORREÇÃO 1: aceita quem_pagou
 @st.dialog("Confirmar Pagamento")
 def modal_pagamento(lancamento_id, descricao):
     st.write(f"**{descricao}**")
-    st.info("Apenas esta parcela será marcada como paga.")
-    quem = st.text_input("Quem está pagando?")  # CORREÇÃO 3: captura responsável
+    quem = st.text_input("Quem realizou este pagamento?")
     if st.button("✅ Confirmar Pagamento", type="primary", use_container_width=True):
-        sucesso, msg = acoes_db(lancamento_id, "pagar", quem_pagou=quem)  # CORREÇÃO 4: passa quem_pagou
+        sucesso, msg = acoes_db(lancamento_id, "pagar", quem_pagou=quem)
         if sucesso:
             st.session_state['refresh'] = True
             st.rerun()
         else:
             st.error(msg)
+
+@st.dialog("✏️ Editar Lançamento")
+def modal_editar(lancamento_id, desc_atual):
+    nova_desc = st.text_input("Novo nome da despesa:", value=desc_atual)
+    if st.button("💾 Salvar Alteração", type="primary", use_container_width=True):
+        if nova_desc.strip():
+            acoes_db(lancamento_id, "editar", nova_desc=nova_desc.strip())
+            st.session_state['refresh'] = True
+            st.rerun()
+        else:
+            st.error("A descrição não pode ficar vazia.")
 
 @st.dialog("Excluir Lançamento")
 def modal_exclusao(lancamento_id):
@@ -150,7 +163,7 @@ def modal_exclusao(lancamento_id):
         st.rerun()
 
 # ==========================================
-# INICIALIZAÇÃO DE ESTADO
+# INICIALIZAÇÃO DE ESTADO E FUNÇÕES AUXILIARES
 # ==========================================
 init_db()
 if 'dados_temp' not in st.session_state:
@@ -159,6 +172,15 @@ if 'ocr_concluido' not in st.session_state:
     st.session_state['ocr_concluido'] = False
 if 'uploader_key' not in st.session_state:
     st.session_state['uploader_key'] = str(uuid.uuid4())
+
+def converter_valor_ptbr_float(val_str):
+    try:
+        return float(val_str.replace('.', '').replace(',', '.'))
+    except:
+        return 0.0
+
+def formatar_float_ptbr(val_float):
+    return f"{val_float:.2f}".replace('.', ',')
 
 # ==========================================
 # UI PRINCIPAL
@@ -176,16 +198,40 @@ with t_contas:
             lista_cats = ["Moradia", "Contas", "Transporte", "Educação", "Saúde", "Alimentação", "Outros"]
             f_cat = c1.selectbox("Categoria", lista_cats, index=6)
             f_data = c2.text_input("Vencimento (dd/mm/aaaa)", value=datetime.now().strftime("%d/%m/%Y"))
-            c3, c4 = st.columns(2)
-            f_valor = c3.text_input("Valor R$", value="")
-            f_quem_pagou = c4.text_input("Responsável?")
-            f_pago = st.checkbox("Já paguei")
+            f_valor = st.text_input("Valor TOTAL R$", value="")
+            
+            st.divider()
+            dividir = st.checkbox("🔄 Dividir esta despesa?")
+            
+            if dividir:
+                cd1, cd2 = st.columns(2)
+                p1_nome = cd1.text_input("Pessoa 1")
+                p1_pct = cd1.number_input("% Pessoa 1", min_value=1, max_value=99, value=50, step=1)
+                
+                p2_nome = cd2.text_input("Pessoa 2")
+                p2_pct = 100 - p1_pct
+                cd2.markdown(f"<div style='margin-top:2rem;'>% Pessoa 2: <b>{p2_pct}%</b></div>", unsafe_allow_html=True)
+                f_quem_pagou = "" # Anulado pois a divisão define nomes
+            else:
+                f_quem_pagou = st.text_input("Responsável (Deixe em branco se ninguém pagou ainda)")
+            
+            f_pago = st.checkbox("Já foi pago")
 
             if st.form_submit_button("✅ Salvar Conta", type="primary", use_container_width=True):
-                if not f_valor.strip(): st.error("Preencha o valor!")
+                if not f_valor.strip(): 
+                    st.error("Preencha o valor!")
                 else:
-                    salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
-                    st.toast("Conta salva!", icon="🎉")
+                    if dividir:
+                        v_float = converter_valor_ptbr_float(f_valor)
+                        v_p1 = formatar_float_ptbr(v_float * (p1_pct / 100))
+                        v_p2 = formatar_float_ptbr(v_float * (p2_pct / 100))
+                        
+                        salvar_no_db(f_data, v_p1, f"{f_desc} (Parte {p1_nome})", f_cat, f_pago, p1_nome)
+                        salvar_no_db(f_data, v_p2, f"{f_desc} (Parte {p2_nome})", f_cat, f_pago, p2_nome)
+                        st.toast("Despesa dividida e salva!", icon="🎉")
+                    else:
+                        salvar_no_db(f_data, f_valor, f_desc, f_cat, f_pago, f_quem_pagou)
+                        st.toast("Conta salva!", icon="🎉")
                     st.rerun()
 
 # --- TAB: CARTÃO / PARCELAS ---
@@ -199,29 +245,57 @@ with t_cartao:
             c3, c4 = st.columns(2)
             f_parcelas_c = c3.number_input("Parcelas", min_value=2, max_value=36, value=2, step=1)
             f_cat_c = c4.selectbox("Categoria ", ["Saúde", "Educação", "Moradia", "Alimentação", "Transporte", "Investimento", "Outros"], index=6)
-            f_quem_pagou_c = st.text_input("Responsável pela compra?")
+            
+            st.divider()
+            dividir_c = st.checkbox("🔄 Dividir esta compra?")
+            
+            if dividir_c:
+                cd1_c, cd2_c = st.columns(2)
+                p1_nome_c = cd1_c.text_input("Pessoa 1 ")
+                p1_pct_c = cd1_c.number_input("% Pessoa 1 ", min_value=1, max_value=99, value=50, step=1)
+                
+                p2_nome_c = cd2_c.text_input("Pessoa 2 ")
+                p2_pct_c = 100 - p1_pct_c
+                cd2_c.markdown(f"<div style='margin-top:2rem;'>% Pessoa 2: <b>{p2_pct_c}%</b></div>", unsafe_allow_html=True)
+                f_quem_pagou_c = ""
+            else:
+                f_quem_pagou_c = st.text_input("Responsável pela compra?")
+            
             f_pago_c = st.checkbox("1ª parcela já paga")
 
             if st.form_submit_button("✅ Salvar Compra", type="primary", use_container_width=True):
-                if not f_valor_c.strip(): st.error("Preencha o valor total!")
+                if not f_valor_c.strip(): 
+                    st.error("Preencha o valor total!")
                 else:
-                    salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
-                    st.toast("Compra parcelada salva!", icon="💳")
+                    if dividir_c:
+                        v_float_c = converter_valor_ptbr_float(f_valor_c)
+                        v_p1_c = formatar_float_ptbr(v_float_c * (p1_pct_c / 100))
+                        v_p2_c = formatar_float_ptbr(v_float_c * (p2_pct_c / 100))
+                        
+                        salvar_no_db(f_data_c, v_p1_c, f"{f_desc_c} (Parte {p1_nome_c})", f_cat_c, f_pago_c, p1_nome_c, f_parcelas_c)
+                        salvar_no_db(f_data_c, v_p2_c, f"{f_desc_c} (Parte {p2_nome_c})", f_cat_c, f_pago_c, p2_nome_c, f_parcelas_c)
+                        st.toast("Compra dividida e parcelada!", icon="💳")
+                    else:
+                        salvar_no_db(f_data_c, f_valor_c, f_desc_c, f_cat_c, f_pago_c, f_quem_pagou_c, f_parcelas_c)
+                        st.toast("Compra parcelada salva!", icon="💳")
                     st.rerun()
 
 # --- TAB: OCR / SCAN ---
 with t_ocr:
     st.info("📸 Tire uma foto do boleto para extrair os dados automaticamente.")
     uploaded_file = st.file_uploader("Câmera / Galeria", type=["png", "jpg", "jpeg", "pdf"], label_visibility="collapsed", key=st.session_state['uploader_key'])
+    
     if uploaded_file:
-        try:
+        try: # CORREÇÃO DE INDENTAÇÃO
             if uploaded_file.type == "application/pdf":
                 images = convert_from_bytes(uploaded_file.read(), first_page=1, last_page=1, dpi=200)
                 img = images[0]
             else:
                 img = Image.open(uploaded_file)
+            
             with st.expander("👁️ Ver documento carregado", expanded=not st.session_state['ocr_concluido']):
                 st.image(img, use_container_width=True)
+            
             if not st.session_state['ocr_concluido']:
                 if st.button("🔍 Analisar Documento", type="primary", use_container_width=True):
                     with st.status("Lendo documento...", expanded=True) as status:
@@ -229,17 +303,21 @@ with t_ocr:
                         desc, cat = "Outros", "Outros"
                         if any(x in txt for x in ['condominio', 'condomínio']): desc, cat = "Condomínio", "Moradia"
                         elif any(x in txt for x in ['ceee', 'equatorial', 'energia', 'luz']): desc, cat = "Energia", "Moradia"
+                        
                         vals = re.findall(r'(\d{1,3}(?:\.\d{3})*,\d{2})', txt)
                         nums = sorted(list(set([float(v.replace('.', '').replace(',', '.')) for v in vals if float(v.replace('.', '').replace(',', '.')) > 5.0])), reverse=True)
                         v_calc = nums[0] if nums else 0.0
+                        
                         datas = re.findall(r'(\d{2}/\d{2}/\d{4})', txt)
                         hoje = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                         dts = [datetime.strptime(d, "%d/%m/%Y") for d in datas if datetime.strptime(d, "%d/%m/%Y") >= hoje]
                         venc = max(dts) if dts else hoje
+                        
                         st.session_state['dados_temp'] = {'data': venc.strftime("%d/%m/%Y"), 'valor': f"{v_calc:,.2f}".replace('.', 'X').replace(',', '.').replace('X', ','), 'desc': desc, 'cat': cat}
                         st.session_state['ocr_concluido'] = True
                         status.update(label="Documento lido com sucesso!", state="complete", expanded=False)
                         st.rerun()
+            
             if st.session_state['ocr_concluido']:
                 st.success("✨ Dados extraídos! Revise e salve abaixo.")
                 with st.container(border=True):
@@ -314,7 +392,7 @@ with t_dash:
             else:
                 st.info("Nenhum pagamento registrado neste mês.")
 
-        with tab_g2:
+        with tab_g2: # CORREÇÃO DE INDENTAÇÃO
             df['mes_periodo'] = df['dt'].dt.to_period('M')
             df['mes_str'] = df['dt'].dt.strftime('%m/%Y')
             evol_cat = df.groupby(['mes_periodo', 'mes_str', 'categoria'])['valor'].sum().reset_index().sort_values('mes_periodo')
@@ -353,16 +431,25 @@ with t_dash:
                 st.markdown(f"**{row['descricao']}**")
                 st.markdown(f"<p class='valor-card {classe_cor}'>R$ {row['valor']:,.2f}</p>", unsafe_allow_html=True)
                 
-                btn_c1, btn_c2 = st.columns(2)
+                # NOVO: Inclusão do botão de Editar nos cards
                 if not row['pago']:
+                    btn_c1, btn_c2, btn_c3 = st.columns([2, 1, 1])
                     with btn_c1:
                         if st.button("✅ Pagar", key=f"pay_{row['id']}", use_container_width=True):
                             modal_pagamento(row['id'], row['descricao'])
                     with btn_c2:
-                        if st.button("🗑️ Excluir", key=f"del_{row['id']}", use_container_width=True):
+                        if st.button("✏️", key=f"edit_{row['id']}", use_container_width=True):
+                            modal_editar(row['id'], row['descricao'])
+                    with btn_c3:
+                        if st.button("🗑️", key=f"del_{row['id']}", use_container_width=True):
                             modal_exclusao(row['id'])
                 else:
-                    if st.button("🗑️ Excluir", key=f"del_{row['id']}", use_container_width=True):
-                        modal_exclusao(row['id'])
+                    btn_c1, btn_c2 = st.columns([1, 1])
+                    with btn_c1:
+                        if st.button("✏️ Editar", key=f"edit_{row['id']}", use_container_width=True):
+                            modal_editar(row['id'], row['descricao'])
+                    with btn_c2:
+                        if st.button("🗑️ Excluir", key=f"del_{row['id']}", use_container_width=True):
+                            modal_exclusao(row['id'])
     else:
         st.info("Nenhum lançamento no banco. Use as abas ao lado para adicionar.", icon="ℹ️")
